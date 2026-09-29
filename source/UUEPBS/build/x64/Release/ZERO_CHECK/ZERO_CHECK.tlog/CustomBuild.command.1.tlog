@@ -1,0 +1,10 @@
+^C:\MYMODS\UUEPBS\SOURCE\UUEPBS\BUILD\CMAKEFILES\B95C480168521150C6A153E5FC4CED10\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SC:/MyMods/UUEPBS/source/UUEPBS -BC:/MyMods/UUEPBS/source/UUEPBS/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/MyMods/UUEPBS/source/UUEPBS/build/UUEPBS.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

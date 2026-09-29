@@ -1,0 +1,19 @@
+{
+  "format": "UUEPBS preset",
+  "version": 2,
+  "help": "length = along the bone (X), width = Y, depth = Z. 1 = unchanged. children: scale_too | keep_size | this_bone_only",
+  "bones": {
+    "boob_l": { "length": 1.25, "width": 1.25, "depth": 1.25, "children": "scale_too" },
+    "boob_r": { "length": 1.25, "width": 1.25, "depth": 1.25, "children": "scale_too" },
+    "butt_l": { "length": 1.25, "width": 1.25, "depth": 1.25, "children": "scale_too" },
+    "butt_r": { "length": 1.25, "width": 1.25, "depth": 1.25, "children": "scale_too" },
+    "pelvis": { "length": 1, "width": 1.08, "depth": 1.05, "children": "keep_size" },
+    "spine_01": { "length": 1, "width": 0.92, "depth": 0.92, "children": "keep_size" },
+    "thigh_l": { "length": 1, "width": 1.12, "depth": 1.12, "children": "keep_size" },
+    "thigh_r": { "length": 1, "width": 1.12, "depth": 1.12, "children": "keep_size" },
+    "thigh_twist_01_l": { "length": 1, "width": 1.12, "depth": 1.12, "children": "keep_size" },
+    "thigh_twist_01_r": { "length": 1, "width": 1.12, "depth": 1.12, "children": "keep_size" },
+    "thighjiggle_l": { "length": 1, "width": 1.12, "depth": 1.12, "children": "keep_size" },
+    "thighjiggle_r": { "length": 1, "width": 1.12, "depth": 1.12, "children": "keep_size" }
+  }
+}

@@ -1,0 +1,13 @@
+C:\MyMods\UUEPBS\source\UUEPBS\src\dllmain.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\dllmain.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\core\body_groups.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\body_groups.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\core\bridge.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\bridge.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\core\mirror.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\mirror.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\core\presets.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\presets.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\core\registry.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\registry.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\core\resolver.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\resolver.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\core\rig_names.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\rig_names.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\core\sculpt.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\sculpt.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\ui\panel_view.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\panel_view.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\ui\soft_raster.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\soft_raster.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\win\pose_hook.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\pose_hook.obj
+C:\MyMods\UUEPBS\source\UUEPBS\src\win\slider_window.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\UUEPBS.dir\Release\slider_window.obj

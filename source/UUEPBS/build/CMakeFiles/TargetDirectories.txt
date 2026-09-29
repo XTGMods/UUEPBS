@@ -1,0 +1,4 @@
+C:/MyMods/UUEPBS/source/UUEPBS/build/CMakeFiles/uuepbs_imgui.dir
+C:/MyMods/UUEPBS/source/UUEPBS/build/CMakeFiles/UUEPBS.dir
+C:/MyMods/UUEPBS/source/UUEPBS/build/CMakeFiles/ALL_BUILD.dir
+C:/MyMods/UUEPBS/source/UUEPBS/build/CMakeFiles/ZERO_CHECK.dir

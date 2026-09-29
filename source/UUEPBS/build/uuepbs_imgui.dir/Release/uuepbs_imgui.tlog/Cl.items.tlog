@@ -1,0 +1,6 @@
+C:\MyMods\UUEPBS\source\UUEPBS\build\_deps\imgui-src\imgui.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\uuepbs_imgui.dir\Release\imgui.obj
+C:\MyMods\UUEPBS\source\UUEPBS\build\_deps\imgui-src\imgui_draw.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\uuepbs_imgui.dir\Release\imgui_draw.obj
+C:\MyMods\UUEPBS\source\UUEPBS\build\_deps\imgui-src\imgui_tables.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\uuepbs_imgui.dir\Release\imgui_tables.obj
+C:\MyMods\UUEPBS\source\UUEPBS\build\_deps\imgui-src\imgui_widgets.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\uuepbs_imgui.dir\Release\imgui_widgets.obj
+C:\MyMods\UUEPBS\source\UUEPBS\build\_deps\imgui-src\backends\imgui_impl_win32.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\uuepbs_imgui.dir\Release\imgui_impl_win32.obj
+C:\MyMods\UUEPBS\source\UUEPBS\build\_deps\imgui-src\backends\imgui_impl_dx11.cpp;C:\MyMods\UUEPBS\source\UUEPBS\build\uuepbs_imgui.dir\Release\imgui_impl_dx11.obj

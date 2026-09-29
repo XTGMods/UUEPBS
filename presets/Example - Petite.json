@@ -1,0 +1,16 @@
+{
+  "format": "UUEPBS preset",
+  "version": 2,
+  "help": "length = along the bone (X), width = Y, depth = Z. 1 = unchanged. children: scale_too | keep_size | this_bone_only",
+  "bones": {
+    "boob_l": { "length": 0.85, "width": 0.85, "depth": 0.85, "children": "scale_too" },
+    "boob_r": { "length": 0.85, "width": 0.85, "depth": 0.85, "children": "scale_too" },
+    "butt_l": { "length": 0.9, "width": 0.9, "depth": 0.9, "children": "scale_too" },
+    "butt_r": { "length": 0.9, "width": 0.9, "depth": 0.9, "children": "scale_too" },
+    "spine_02": { "length": 1, "width": 0.95, "depth": 0.95, "children": "keep_size" },
+    "thigh_l": { "length": 1, "width": 0.94, "depth": 0.94, "children": "keep_size" },
+    "thigh_r": { "length": 1, "width": 0.94, "depth": 0.94, "children": "keep_size" },
+    "thigh_twist_01_l": { "length": 1, "width": 0.94, "depth": 0.94, "children": "keep_size" },
+    "thigh_twist_01_r": { "length": 1, "width": 0.94, "depth": 0.94, "children": "keep_size" }
+  }
+}

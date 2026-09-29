@@ -1,0 +1,13 @@
+{
+  "Project": "SB",
+  "Game": "Stellar Blade",
+  "Target": "",
+  "TargetClassPath": "",
+  "PrimaryComponent": "CharacterMesh0",
+  "IncludeComponents": [],
+  "ExcludeComponents": [],
+  "SameSkeletonOnly": true,
+  "BodyGroups": {},
+  "Hook": { "Slot": 303, "Buffers": "0x5A8", "ReadIndex": "0x674" },
+  "_help": "Target: actor class to edit (empty = the pawn you control). TargetClassPath: optional full path of that class. PrimaryComponent: mesh whose bones are listed (empty = the Character's Mesh). Include/ExcludeComponents: mesh names. SameSkeletonOnly: also edit other meshes on the actor that share the primary mesh's skeleton. Hook: pose hook values for this game's exe (custom UE 4.26); delete the line if a game update breaks it."
+}

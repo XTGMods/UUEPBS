@@ -1,0 +1,52 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\dllmain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\core\body_groups.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\core\bridge.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\core\mirror.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\core\presets.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\core\registry.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\core\resolver.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\core\rig_names.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\core\sculpt.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\ui\panel_view.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\ui\soft_raster.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\win\pose_hook.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\MyMods\UUEPBS\source\UUEPBS\src\win\slider_window.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\MyMods\UUEPBS\source\UUEPBS\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{CE700DFA-F09F-3972-BC54-E72F4A2CFFA4}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,13 @@
+---
+BasedOnStyle: Microsoft
+ColumnLimit: 150
+NamespaceIndentation: All
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortBlocksOnASingleLine: Empty
+AllowShortLambdasOnASingleLine: Empty
+AccessModifierOffset: -2
+IndentAccessModifiers: false
+SortIncludes: false
+Standard: Latest
+...

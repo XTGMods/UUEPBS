@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/imgui-populate"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/247abb76d9a5cc36eedc87fb0e742a4e/imgui-populate.rule"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/2c18ef502ad630ef91ce048399c61d6e/imgui-populate-complete.rule"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/b5b37c0dbfeeee28446787a2f2a25463/imgui-populate-build.rule"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/b5b37c0dbfeeee28446787a2f2a25463/imgui-populate-configure.rule"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/b5b37c0dbfeeee28446787a2f2a25463/imgui-populate-download.rule"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/b5b37c0dbfeeee28446787a2f2a25463/imgui-populate-install.rule"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/b5b37c0dbfeeee28446787a2f2a25463/imgui-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/b5b37c0dbfeeee28446787a2f2a25463/imgui-populate-patch.rule"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/b5b37c0dbfeeee28446787a2f2a25463/imgui-populate-test.rule"
+		},
+		{
+			"file" : "C:/MyMods/UUEPBS/source/UUEPBS/build/_deps/imgui-subbuild/CMakeFiles/b5b37c0dbfeeee28446787a2f2a25463/imgui-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"imgui-populate"
+		],
+		"name" : "imgui-populate"
+	}
+}

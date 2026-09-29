@@ -4,6 +4,11 @@
 # About:
 Universal Unreal Engine Player Body Sliders (UUEPBS) is a near universal player character body slider mod for Unreal Engine based games, leveraging the powerful UE4/5SS tool. UUEPBS gives players the freedom to customise their character's body proportions, such as hips, spine, shoulders, arms, legs etc. With capabilities such as saving and loading user-defined UUEPBS presets, as well as being able to change NPC's body proportions and save their UUEPBS presets.
 
+
+https://github.com/user-attachments/assets/4e4372bc-8a64-4255-b8ae-a33645ce187e
+
+
+
 ## Tested and confirmed working games so far
 * GON God of Nothing
 * Wuchang Fallen Feathers
@@ -14,6 +19,8 @@ Universal Unreal Engine Player Body Sliders (UUEPBS) is a near universal player 
 * VanySlash
 * Mortal Shell 2
 * Lies of P
+* Dawn Break
+* Lunar Eclipse
 ## Confirmed incompatible games
 * Ninja Gaiden 2 Black - Hybrid propietary/UE game engine
 

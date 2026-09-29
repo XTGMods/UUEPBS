@@ -63,3 +63,6 @@ UE4SS console: `uuepbs` (toggle window), `uuepbs status`, `uuepbs rescan`, `uuep
 * If the simplified Body tab only manages to show very few bones, then you need to use the detailed Bones tab.
 * If UUEPBS is not having any effects on your character upon initial loading of the game, press F7 to rescan and refresh the player character.
 * Share your UUEPBS with fellow gamers!
+## Credits
+UUEPBS (Universal Unreal Engine Player Body Sliders) by **XTGMods**.
+Uses [Dear ImGui](https://github.com/ocornut/imgui) (MIT, see `THIRD_PARTY_NOTICES.txt`).

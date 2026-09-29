@@ -4,6 +4,19 @@
 # About:
 Universal Unreal Engine Player Body Sliders (UUEPBS) is a near universal player character body slider mod for Unreal Engine based games, leveraging the powerful UE4/5SS tool. UUEPBS gives players the freedom to customise their character's body proportions, such as hips, spine, shoulders, arms, legs etc. With capabilities such as saving and loading user-defined UUEPBS presets, as well as being able to change NPC's body proportions and save their UUEPBS presets.
 
+## Tested and confirmed working games so far
+* GON God of Nothing
+* Wuchang Fallen Feathers
+* Beast of Reincarnation
+* Clair Obscur Expedition 33
+* The Killing Antidote
+* Stellar Blade
+* VanySlash
+* Mortal Shell 2
+* Lies of P
+## Confirmed incompatible games
+* Ninja Gaiden 2 Black - Hybrid propietary/UE game engine
+
 ## Installing
 1. Install UE4SS for the game as usual, use experimental-latest releases.
 2. Extract UUEPBS folder to `Game-Name\<Win64>\ue4ss\Mods`, where Game-Name is the name of the game located inside its root folder.
@@ -64,5 +77,5 @@ UE4SS console: `uuepbs` (toggle window), `uuepbs status`, `uuepbs rescan`, `uuep
 * If UUEPBS is not having any effects on your character upon initial loading of the game, press F7 to rescan and refresh the player character.
 * Share your UUEPBS with fellow gamers!
 ## Credits
-UUEPBS (Universal Unreal Engine Player Body Sliders) by **XTGMods**.
+Claude
 Uses [Dear ImGui](https://github.com/ocornut/imgui) (MIT, see `THIRD_PARTY_NOTICES.txt`).

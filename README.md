@@ -77,5 +77,5 @@ UE4SS console: `uuepbs` (toggle window), `uuepbs status`, `uuepbs rescan`, `uuep
 * If UUEPBS is not having any effects on your character upon initial loading of the game, press F7 to rescan and refresh the player character.
 * Share your UUEPBS with fellow gamers!
 ## Credits
-Claude
-Uses [Dear ImGui](https://github.com/ocornut/imgui) (MIT, see `THIRD_PARTY_NOTICES.txt`).
+* Claude
+* Uses [Dear ImGui](https://github.com/ocornut/imgui) (MIT, see `THIRD_PARTY_NOTICES.txt`).

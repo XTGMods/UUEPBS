@@ -11,6 +11,7 @@
 #include "core/body_groups.hpp"
 #include "core/bridge.hpp"
 #include "core/json.hpp"
+#include "core/morphs.hpp"
 #include "core/presets.hpp"
 #include "core/registry.hpp"
 #include "ui/panel_view.hpp"
@@ -40,7 +41,7 @@ namespace
     namespace fs = std::filesystem;
     using Clock = std::chrono::steady_clock;
 
-    constexpr const char* kVersion = "v2.1.0";
+    constexpr const char* kVersion = "v2.2.0";
 
     fs::path module_folder()
     {
@@ -158,6 +159,10 @@ namespace
             while (!m_quit.load())
             {
                 poll_hotkey();
+                if (tick % 8 != 0 && morphs_changed() && Clock::now() - last_publish() >= std::chrono::milliseconds(60))
+                {
+                    publish(); // morph slider drags reach Lua without waiting for the next bridge step
+                }
                 if (tick++ % 8 == 0)
                 {
                     try
@@ -431,7 +436,8 @@ namespace
         }
 
         // Scripts/BoneDictionary.json and the game profile's "BodyGroups": reloaded whenever
-        // either file changes, so edits show up in the Body tab without restarting the game.
+        // either file changes, so edits show up in the Simplified Panel without restarting the game.
+        // The same profile read also picks up "MorphGroups" / "ExcludeMorphs".
         void watch_body_map()
         {
             const auto now = Clock::now();
@@ -479,9 +485,20 @@ namespace
                 status = "built-in dictionary (Scripts\\BoneDictionary.json not found)";
             }
             std::vector<uuepbs::UserGroup> user;
+            uuepbs::MorphProfile morph_profile;
+            std::string morph_status = "no morph settings in the game profile";
             if (ps && read_whole(profile, text))
             {
                 apply_hook_override(text);
+                std::string morph_message;
+                if (uuepbs::parse_morph_profile(text, morph_profile, morph_message))
+                {
+                    morph_status = morph_message;
+                }
+                else
+                {
+                    morph_status = "game profile morph settings ignored: " + morph_message;
+                }
                 if (uuepbs::parse_user_groups(text, user, message))
                 {
                     if (!user.empty())
@@ -494,8 +511,9 @@ namespace
                     status += ", game profile BodyGroups ignored: " + message;
                 }
             }
-            g_log.line("body tab mapping: " + status);
+            g_log.line("simplified panel mapping: " + status + "; morphs: " + morph_status);
             uuepbs::BodyMapSource::instance().set(std::move(dict), std::move(user), status);
+            uuepbs::MorphProfileSource::instance().set(std::move(morph_profile), morph_status);
         }
 
         // Once, some seconds after the hook went in: did the tracked meshes actually get edited?
@@ -581,6 +599,7 @@ namespace
 
             setup(state);
             sync_rigs(state);
+            sync_morph_names(state);
 
             std::vector<uuepbs::bridge::Command> todo;
             {
@@ -647,16 +666,19 @@ namespace
                 m_shelf_ready = true;
                 const std::string startup = state.setting("startup");
                 uuepbs::EditBook book;
+                uuepbs::MorphBook morphs;
                 std::string message;
-                if (!startup.empty() && m_shelf.load(startup, book, message))
+                if (!startup.empty() && m_shelf.load(startup, book, message, &morphs))
                 {
                     uuepbs::Registry::instance().replace_edits(std::move(book));
+                    uuepbs::Registry::instance().replace_morphs(std::move(morphs));
                     g_log.line("startup preset: " + message);
                 }
                 else if (state.setting("restore", "1") == "1" && m_shelf.exists(uuepbs::PresetShelf::kSessionName) &&
-                         m_shelf.load(uuepbs::PresetShelf::kSessionName, book, message))
+                         m_shelf.load(uuepbs::PresetShelf::kSessionName, book, message, &morphs))
                 {
                     uuepbs::Registry::instance().replace_edits(std::move(book));
+                    uuepbs::Registry::instance().replace_morphs(std::move(morphs));
                     g_log.line("restored last session: " + message);
                 }
             }
@@ -676,6 +698,12 @@ namespace
                 options.cpu_renderer = renderer != "gpu" && renderer != "d3d11" && renderer != "directx";
                 const long fps = std::strtol(state.setting("fps", "30").c_str(), nullptr, 10);
                 options.fps = static_cast<int>(fps >= 15 && fps <= 60 ? fps : 30);
+                const std::string skins = state.setting("skins");
+                options.skins_folder = skins.empty() ? m_folder.parent_path().parent_path().parent_path().parent_path() / L"UUEPBS Skins"
+                                                     : uuepbs::path_from_utf8(skins);
+                options.skins_folder = options.skins_folder.lexically_normal();
+                options.skin = state.setting("skin");
+                g_log.line("skins folder: " + uuepbs::path_to_utf8(options.skins_folder));
                 g_log.line(std::string("window renderer: ") + (options.cpu_renderer ? "CPU" : "GPU (Direct3D 11)"));
                 m_window_started = uuepbs::ui::start(&m_shelf, options);
             }
@@ -772,6 +800,74 @@ namespace
                     ++it;
                 }
             }
+        }
+
+        // Morph names of every tracked mesh (primary first), shown in the Detailed Panel.
+        void sync_morph_names(const uuepbs::bridge::LuaState& state)
+        {
+            std::vector<std::string> names;
+            std::set<std::string> seen;
+            auto add_rig = [&](const uuepbs::bridge::RigInfo& r) {
+                for (const std::string& m : r.morphs)
+                {
+                    if (seen.insert(uuepbs::fold_case(m)).second)
+                    {
+                        names.push_back(m);
+                    }
+                }
+            };
+            for (const auto& r : state.rigs)
+            {
+                if (r.primary)
+                {
+                    add_rig(r);
+                }
+            }
+            for (const auto& r : state.rigs)
+            {
+                if (!r.primary)
+                {
+                    add_rig(r);
+                }
+            }
+            uuepbs::Registry& reg = uuepbs::Registry::instance();
+            if (names.size() != reg.morph_names().size())
+            {
+                g_log.line(std::to_string(names.size()) + " morph target(s) on the tracked meshes");
+            }
+            reg.set_morph_names(std::move(names));
+            std::set<std::string> animated;
+            for (const std::string& m : state.animated_morphs)
+            {
+                animated.insert(uuepbs::fold_case(m));
+            }
+            if (animated.size() != reg.animated_morphs().size())
+            {
+                std::string list;
+                for (const std::string& m : state.animated_morphs)
+                {
+                    list += (list.empty() ? "" : ", ") + m;
+                }
+                if (!list.empty())
+                {
+                    g_log.line("morphs the game keeps setting itself (edits may not stick): " + list);
+                }
+            }
+            reg.set_animated_morphs(std::move(animated));
+        }
+
+        Clock::time_point last_publish()
+        {
+            std::lock_guard guard(m_lock);
+            return m_last_publish;
+        }
+
+        // True when the morph weights Lua should see changed since the last publish.
+        bool morphs_changed()
+        {
+            const uint64_t rev = uuepbs::Registry::instance().morph_revision();
+            std::lock_guard guard(m_lock);
+            return rev != m_out.morph_revision;
         }
 
         void keep_hook_going()
@@ -891,8 +987,25 @@ namespace
         void publish()
         {
             std::string text;
+            uuepbs::Registry& reg = uuepbs::Registry::instance();
+            uint64_t morph_rev = 0;
+            const uuepbs::MorphBook morphs = reg.morphs(&morph_rev);
+            const bool send_morphs = reg.enabled();
             {
                 std::lock_guard guard(m_lock);
+                if (morph_rev != m_out.morph_revision)
+                {
+                    m_out.morph_revision = morph_rev;
+                    m_out.morphs.clear();
+                    if (send_morphs)
+                    {
+                        for (const auto& [key, m] : morphs)
+                        {
+                            m_out.morphs.emplace_back(m.name, m.weight);
+                        }
+                    }
+                    m_out_dirty = true;
+                }
                 if (!m_out_dirty && Clock::now() - m_last_publish < std::chrono::seconds(5))
                 {
                     return;
@@ -914,7 +1027,8 @@ namespace
             uuepbs::Registry& reg = uuepbs::Registry::instance();
             std::string s = std::string("UUEPBS ") + kVersion + " by XTGMods\n";
             s += uuepbs::hook::describe() + "\n";
-            s += std::string("sliders ") + (reg.enabled() ? "enabled" : "disabled") + ", " + std::to_string(reg.edits().size()) + " edited bone(s)\n";
+            s += std::string("sliders ") + (reg.enabled() ? "enabled" : "disabled") + ", " + std::to_string(reg.edits().size()) + " edited bone(s), " +
+                 std::to_string(reg.morphs().size()) + " of " + std::to_string(reg.morph_names().size()) + " morph(s) set\n";
             s += "mirroring: " + reg.mirror_source() + "\n";
             s += "presets: " + uuepbs::path_to_utf8(m_shelf.folder()) + "\n";
             for (const auto& r : reg.rigs())
@@ -959,14 +1073,17 @@ namespace
                 if (v == "load")
                 {
                     uuepbs::EditBook book;
-                    if (m_shelf.load(c.argument, book, message))
+                    uuepbs::MorphBook morphs;
+                    if (m_shelf.load(c.argument, book, message, &morphs))
                     {
                         reg.replace_edits(std::move(book));
+                        reg.replace_morphs(std::move(morphs));
                     }
                 }
                 else
                 {
-                    m_shelf.save(c.argument, reg.edits(), message);
+                    const uuepbs::MorphBook morphs = reg.morphs();
+                    m_shelf.save(c.argument, reg.edits(), message, &morphs);
                 }
                 uuepbs::ui::post_message(message);
                 return message;
@@ -979,12 +1096,60 @@ namespace
             if (v == "reset")
             {
                 reg.clear_edits();
+                reg.clear_morphs();
                 uuepbs::ui::post_message("All sliders reset");
                 return "all sliders reset";
             }
             if (v == "diag")
             {
                 return "diagnostics written to " + write_diagnostics();
+            }
+            if (v == "skin")
+            {
+                // "ubs skin" lists the skins, "ubs skin <name>" switches (the window thread loads it).
+                if (c.argument.empty())
+                {
+                    const auto names = uuepbs::ui::list_skins();
+                    std::string text = "skins (current: " + uuepbs::ui::current_skin() + "):";
+                    for (const std::string& n : names)
+                    {
+                        text += "\n  " + n;
+                    }
+                    return text;
+                }
+                uuepbs::ui::request_skin(c.argument);
+                return "switching the window skin to '" + c.argument + "' (see the window for the result)";
+            }
+            if (v == "morph")
+            {
+                // "ubs morph <name> <weight>" sets one, "ubs morph <name>" gives it back to the game.
+                std::string name = c.argument;
+                double weight = 0.0;
+                bool has_weight = false;
+                const size_t space = name.find_last_of(' ');
+                if (space != std::string::npos)
+                {
+                    char* end = nullptr;
+                    const std::string tail = name.substr(space + 1);
+                    const double w = std::strtod(tail.c_str(), &end);
+                    if (end && *end == '\0' && !tail.empty())
+                    {
+                        weight = w;
+                        has_weight = true;
+                        name.resize(space);
+                    }
+                }
+                if (name.empty())
+                {
+                    return "usage: ubs morph <name> [weight]";
+                }
+                if (has_weight)
+                {
+                    reg.set_morph(name, weight);
+                    return "morph " + name + " set to " + std::to_string(uuepbs::clamp_morph(weight));
+                }
+                reg.clear_morph(name);
+                return "morph " + name + " back to the game's value";
             }
             return "unknown command '" + v + "'";
         }

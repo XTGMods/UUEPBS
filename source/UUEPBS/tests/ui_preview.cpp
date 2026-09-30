@@ -5,6 +5,7 @@
 #include "core/presets.hpp"
 #include "core/registry.hpp"
 #include "ui/panel_view.hpp"
+#include "ui/skin.hpp"
 #include "ui/soft_raster.hpp"
 
 #include <chrono>
@@ -268,9 +269,30 @@ int main(int argc, char** argv)
 
     reg.on_pose_finalized(comp);
 
+    // Morph targets as Lua would report them, a profile with MorphGroups and one exclusion.
+    reg.set_morph_names({"BreastSize", "Breast_L_Lift", "Breast_R_Lift", "Belly", "HipWidth", "ThighThickness", "Muscle", "WaistNarrow",
+                         "Face_Smile", "Face_Blink_L", "Face_Blink_R", "Corrective_Elbow"});
+    {
+        MorphProfile mp;
+        std::string mm;
+        parse_morph_profile(R"({ "MorphGroups": { "Breasts": ["BreastSize"], "Hips": { "Morphs": ["HipWidth"], "Section": "Body shape" },
+                                                    "Thighs": { "Morphs": ["ThighThickness"], "Section": "Body shape" } },
+                                 "ExcludeMorphs": ["Corrective_*"] })",
+                            mp, mm);
+        MorphProfileSource::instance().set(mp, mm);
+    }
+    reg.set_morph("BreastSize", 0.65);
+    reg.set_morph("Breast_L_Lift", 0.3);
+    reg.set_morph("Breast_R_Lift", 0.3);
+    reg.set_morph("Face_Smile", 1.0);
+    reg.set_animated_morphs({"face_smile"});
+
     PresetShelf shelf;
     shelf.set_folder("/tmp/claude-uuepbs-preview/UUEPBS Presets");
-    shelf.save("Curvy", reg.edits(), msg);
+    {
+        const MorphBook morphs = reg.morphs();
+        shelf.save("Curvy", reg.edits(), msg, &morphs);
+    }
     shelf.save("Petite", EditBook{}, msg);
     shelf.save("Tall legs", reg.edits(), msg);
 
@@ -282,86 +304,155 @@ int main(int argc, char** argv)
     io.DisplaySize = ImVec2(std::round(720 * dpi), std::round(900 * dpi));
     io.DeltaTime = 1.0f / 60.0f;
     io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", 19.0f);
+
+    // A brand-new skins folder: the DLL writes its README and the bundled example skin there.
+    const std::filesystem::path skins = "/tmp/claude-uuepbs-preview/UUEPBS Skins";
+    std::filesystem::remove_all(skins);
+    ui::skin().set_folder(skins, ""); // built-in look first
+    ui::skin().update();
     ui::PanelView::apply_theme(dpi);
 
     FakeHost host;
     FakeTargets targets;
     ui::PanelView view;
-    view.configure(&shelf, &host, &targets, "v2.1.0", true);
+    view.configure(&shelf, &host, &targets, "v2.2.0", true);
     view.refresh_presets();
-    view.set_message("Loaded 'Curvy' (7 bone(s))");
+    view.set_message("Loaded 'Curvy' (7 bone(s), 4 morph(s))");
 
-    const struct
+    struct Shot
     {
         ui::PanelView::Tab tab;
+        int detail; // -1, or a PanelView::Detail
         const char* file;
-    } shots[] = {{ui::PanelView::Tab::Body, "preview_body.ppm"},
-                 {ui::PanelView::Tab::Bones, "preview_bones.ppm"},
-                 {ui::PanelView::Tab::Presets, "preview_presets.ppm"},
-                 {ui::PanelView::Tab::Status, "preview_status.ppm"}};
+    };
+    const Shot shots[] = {{ui::PanelView::Tab::Simplified, -1, "preview_simplified.ppm"},
+                          {ui::PanelView::Tab::Detailed, 0, "preview_detailed.ppm"},
+                          {ui::PanelView::Tab::Detailed, 1, "preview_morphs.ppm"},
+                          {ui::PanelView::Tab::Presets, -1, "preview_presets.ppm"},
+                          {ui::PanelView::Tab::Status, -1, "preview_status.ppm"}};
 
     ui::SoftRenderer soft;
     int failures = 0;
-    for (const auto& shot : shots)
+    for (int pass = 0; pass < 2; ++pass)
     {
-        view.focus_tab(shot.tab);
-        if (shot.tab == ui::PanelView::Tab::Bones)
-            view.select_bone("boob_l");
-        for (int frame = 0; frame < 4; ++frame)
+        if (pass == 1)
         {
-            ImGui::NewFrame();
-            view.draw();
-            ImGui::Render();
-            handle_textures(ImGui::GetDrawData());
-        }
-        Canvas cv((int)io.DisplaySize.x, (int)io.DisplaySize.y, ImVec4(0.085f, 0.085f, 0.105f, 1));
-        raster(cv, ImGui::GetDrawData());
-        save_ppm(cv, shot.file);
-        std::printf("wrote %s\n", shot.file);
-
-        // Same frame through the shipping CPU renderer: compare with the reference raster and time it.
-        soft.resize(cv.w, cv.h);
-        const uint32_t bg = (22u << 16) | (22u << 8) | 27u; // 0.085/0.085/0.105
-        const auto t0 = std::chrono::steady_clock::now();
-        const int runs = 50;
-        for (int r = 0; r < runs; ++r)
-            soft.render(ImGui::GetDrawData(), bg, true); // force: time real draws
-        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / runs;
-        const auto t1 = std::chrono::steady_clock::now();
-        for (int r = 0; r < runs; ++r)
-            soft.render(ImGui::GetDrawData(), bg, false); // unchanged: fingerprint only
-        const double skip_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count() / runs;
-        double sum = 0; int worst = 0; size_t off = 0;
-        std::string soft_name = std::string("soft_") + shot.file;
-        FILE* f = std::fopen(soft_name.c_str(), "wb");
-        std::fprintf(f, "P6\n%d %d\n255\n", cv.w, cv.h);
-        for (int i = 0; i < cv.w * cv.h; ++i)
-        {
-            const uint32_t p = soft.pixels()[i];
-            const int s[3] = {int((p >> 16) & 255), int((p >> 8) & 255), int(p & 255)};
-            for (int ch = 0; ch < 3; ++ch)
+            const auto listed = ui::Skin::list(skins);
+            if (listed.empty())
             {
-                const int ref = (int)std::lround(std::min(1.0f, std::max(0.0f, cv.px[i * 3 + ch])) * 255.0f);
-                const int d = std::abs(ref - s[ch]);
-                sum += d; worst = std::max(worst, d); off += d > 48;
-                std::fputc(s[ch], f);
+                std::printf("  FAIL: the example skin was not written into a new skins folder\n");
+                failures++;
+                break;
+            }
+            ui::Skin::request(listed.front());
+        }
+        for (const Shot& shot : shots)
+        {
+            view.focus_tab(shot.tab);
+            if (shot.detail >= 0)
+                view.focus_detail(static_cast<ui::PanelView::Detail>(shot.detail));
+            if (shot.tab == ui::PanelView::Tab::Detailed)
+                view.select_bone("boob_l");
+            for (int frame = 0; frame < 4; ++frame)
+            {
+                if (ui::skin().update())
+                    ui::PanelView::apply_theme(dpi);
+                ImGui::NewFrame();
+                view.draw();
+                ImGui::Render();
+                handle_textures(ImGui::GetDrawData());
+            }
+            if (pass == 1 && &shot == &shots[0])
+            {
+                std::printf("skin: %s\n", ui::skin().status().c_str());
+                for (const std::string& p : ui::skin().problems())
+                {
+                    std::printf("  FAIL: skin problem: %s\n", p.c_str());
+                    failures++;
+                }
+            }
+            const std::string file = std::string(pass ? "skin_" : "") + shot.file;
+            const ImVec4 bgc = ui::skin().color(ui::Role::Window);
+            Canvas cv((int)io.DisplaySize.x, (int)io.DisplaySize.y, ImVec4(bgc.x, bgc.y, bgc.z, 1));
+            raster(cv, ImGui::GetDrawData());
+            save_ppm(cv, file.c_str());
+            std::printf("wrote %s\n", file.c_str());
+
+            // Same frame through the shipping CPU renderer: compare with the reference raster and time it.
+            soft.resize(cv.w, cv.h);
+            const uint32_t bg = ui::skin().clear_rgb();
+            const auto tf = std::chrono::steady_clock::now();
+            soft.render(ImGui::GetDrawData(), bg, true); // first draw: nothing cached yet
+            const double first_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tf).count();
+            std::vector<uint32_t> first(soft.pixels(), soft.pixels() + size_t(cv.w) * cv.h);
+            const auto t0 = std::chrono::steady_clock::now();
+            const int runs = 30;
+            for (int r = 0; r < runs; ++r)
+                soft.render(ImGui::GetDrawData(), bg, true); // force: time real draws
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / runs;
+            const auto t1 = std::chrono::steady_clock::now();
+            for (int r = 0; r < runs; ++r)
+                soft.render(ImGui::GetDrawData(), bg, false); // unchanged: fingerprint only
+            const double skip_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count() / runs;
+            double sum = 0; int worst = 0; size_t off = 0;
+            std::string soft_name = std::string("soft_") + file;
+            FILE* f = std::fopen(soft_name.c_str(), "wb");
+            std::fprintf(f, "P6\n%d %d\n255\n", cv.w, cv.h);
+            for (int i = 0; i < cv.w * cv.h; ++i)
+            {
+                const uint32_t p = soft.pixels()[i];
+                const int sp[3] = {int((p >> 16) & 255), int((p >> 8) & 255), int(p & 255)};
+                for (int ch = 0; ch < 3; ++ch)
+                {
+                    const int ref = (int)std::lround(std::min(1.0f, std::max(0.0f, cv.px[i * 3 + ch])) * 255.0f);
+                    const int d = std::abs(ref - sp[ch]);
+                    sum += d; worst = std::max(worst, d); off += d > 48;
+                    std::fputc(sp[ch], f);
+                }
+            }
+            std::fclose(f);
+            const double mean = sum / (cv.w * cv.h * 3.0);
+            if (soft.render(ImGui::GetDrawData(), bg, false))
+            {
+                std::printf("  FAIL: an unchanged frame was drawn again\n");
+                failures++;
+            }
+            std::printf("  cpu renderer: %.2f ms first draw, %.2f ms/frame drawn, %.3f ms skipped (%zu fast rects, %zu cached, %zu triangles), mean diff %.3f, "
+                        "pixels off by >48: %zu\n",
+                        first_ms, ms, skip_ms, soft.stats().fast_rects, soft.stats().cached_quads, soft.stats().triangles, mean, off);
+            if (std::memcmp(first.data(), soft.pixels(), first.size() * 4) != 0)
+            {
+                std::printf("  FAIL: a frame drawn from the quad cache differs from the first draw\n");
+                failures++;
+            }
+            if (mean > 1.0 || off > size_t(cv.w * cv.h) / 500)
+            {
+                std::printf("  FAIL: CPU renderer differs from the reference\n");
+                failures++;
             }
         }
-        std::fclose(f);
-        const double mean = sum / (cv.w * cv.h * 3.0);
-        if (soft.render(ImGui::GetDrawData(), bg, false))
-        {
-            std::printf("  FAIL: an unchanged frame was drawn again\n");
-            failures++;
-        }
-        std::printf("  cpu renderer: %.2f ms/frame drawn, %.3f ms skipped (%zu fast rects, %zu triangles), mean diff %.3f, pixels off by >48: %zu\n", ms,
-                    skip_ms, soft.stats().fast_rects, soft.stats().triangles, mean, off);
-        if (mean > 1.0 || off > size_t(cv.w * cv.h) / 500)
-        {
-            std::printf("  FAIL: CPU renderer differs from the reference\n");
-            failures++;
-        }
     }
+
+    // Switching back to the built-in look must release the skin's textures.
+    ui::Skin::request("");
+    for (int frame = 0; frame < 3; ++frame)
+    {
+        if (ui::skin().update())
+            ui::PanelView::apply_theme(dpi);
+        ImGui::NewFrame();
+        view.draw();
+        ImGui::Render();
+        handle_textures(ImGui::GetDrawData());
+    }
+    ui::skin().update();
+    const int user_textures = ImGui::GetPlatformIO().Textures.Size - ImGui::GetIO().Fonts->TexList.Size;
+    std::printf("skin textures left after switching back: %d\n", user_textures);
+    if (ui::skin().name() != "" || user_textures != 0)
+    {
+        std::printf("  FAIL: built-in look not restored cleanly\n");
+        failures++;
+    }
+    ui::skin().shutdown();
     ImGui::DestroyContext();
     return failures;
 }

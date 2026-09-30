@@ -30,6 +30,13 @@ return {
     -- skips frames that would look the same). Lower = less CPU taken from the game. 15-60.
     WindowFps = 30,
 
+    -- Window skin: the name of a folder in <Win64>\<SkinFolderName> ("" = built-in look).
+    -- A skin picked in the window (Status tab) or with "ubs skin <name>" wins over this.
+    -- See README.txt in that folder; an example skin is written there the first time.
+    Skin = "",
+    SkinFolderName = "UUEPBS Skins",
+    SkinFolder = "", -- absolute path to keep skins somewhere else
+
     KeepWindowOnTop = true,
     WindowScale = 1.0, -- multiplies the Windows DPI scale
     FontSize = 19,     -- text size in the window (pixels before DPI scaling)
@@ -44,6 +51,9 @@ return {
     -- How often it checks that the character and its meshes are still the same.
     -- Only cheap validity checks run here; a full scan happens when something changed.
     WatchIntervalMs = 3000,
+    -- While the window is open, morph target sliders are applied this often (ms) so dragging
+    -- feels live. 0 = only every PollIntervalMs. Nothing runs at this rate while it is closed.
+    MorphPollMs = 100,
 
     Verbose = false,
 

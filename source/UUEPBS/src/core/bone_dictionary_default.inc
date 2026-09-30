@@ -3,7 +3,7 @@ R"UBSD({
   "format": "UUEPBS bone dictionary",
   "version": 1,
   "help": [
-    "Decides which bones each slider in the Body tab drives. Edit freely: the window picks up changes within a few seconds.",
+    "Decides which bones each slider in the Simplified Panel drives. Edit freely: the window picks up changes within a few seconds.",
     "Bone names are cleaned before matching: IgnorePrefixes come off the front, the left/right marker is removed,",
     "IgnoreSuffixes come off the end, then everything becomes lower case letters and digits only.",
     "  MOT_Thigh_L -> thigh    CC_Base_L_Upperarm -> upperarm    Chest_M -> chest    mixamorig:LeftUpLeg -> upleg",
@@ -34,8 +34,8 @@ R"UBSD({
     { "Section": "Torso", "Title": "Rib cage", "Bones": ["spine02", "spine2", "chestlower", "chest", "abdomenupper", "spine002", "ribs", "ribcage", "*xiong"],
       "Children": "keep_size", "Hint": "Upper torso. Arms, neck and breasts keep their size but move with it." },
     { "Title": "Waist", "Bones": ["spine01", "abdomenlower", "abdomen", "spine", "spine001", "waist", "spine1", "*yaobu*", "*koshi*"],
-      "Children")UBSD"
-R"UBSD(: "keep_size", "Hint": "Mid torso / waist." },
+      "C)UBSD"
+R"UBSD(hildren": "keep_size", "Hint": "Mid torso / waist." },
     { "Title": "Belly", "Bones": ["belly", "belly#", "stomach", "tummy", "*belly*", "*fubu*"], "Children": "scale_too",
       "Hint": "Belly / stomach soft-body bone." },
     { "Title": "Hips", "Bones": ["pelvis", "hips", "hip", "pelvis#"], "Children": "keep_size",
@@ -69,8 +69,8 @@ R"UBSD(: "keep_size", "Hint": "Mid torso / waist." },
     { "Title": "Biceps", "Bones": ["*bicep*"], "MatchAll": true, "Children": "scale_too", "Hint": "Biceps helper bones." },
     { "Title": "Triceps", "Bones": ["*tricep*"], "MatchAll": true, "Children": "scale_too", "Hint": "Triceps helper bones." },
     { "Title": "Pecs", "Bones": ["*pectoral*", "pec", "pec#", "pecs", "*pecs*", "*claviclepec*", "*chestmuscle*"], "MatchAll": true,
-      "Children": "scale_too", "Hint": "Chest mu)UBSD"
-R"UBSD(scle helper bones." },
+      "Children": "scale_too", "Hint": ")UBSD"
+R"UBSD(Chest muscle helper bones." },
     { "Title": "Lats", "Bones": ["*latissimus*", "lat", "lats", "lat#", "*lats"], "MatchAll": true, "Children": "scale_too",
       "Hint": "Latissimus (back width) helper bones." },
     { "Title": "Traps", "Bones": ["*trapezius*", "trap", "traps", "trap#"], "MatchAll": true, "Children": "scale_too",

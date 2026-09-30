@@ -3,6 +3,7 @@
 #pragma once
 
 #include "mirror.hpp"
+#include "morphs.hpp"
 #include "sculpt.hpp"
 
 #include <array>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -101,7 +103,22 @@ namespace uuepbs
         void clear_edits();
 
         bool enabled() const { return m_enabled.load(std::memory_order_relaxed); }
-        void set_enabled(bool on);
+        void set_enabled(bool on); // also bumps the morph revision (morphs are sent to Lua only while enabled)
+
+        // ---- morph targets (weights applied by the Lua script) ------------------
+        MorphBook morphs(uint64_t* revision = nullptr) const;
+        uint64_t morph_revision() const { return m_morph_revision.load(std::memory_order_acquire); }
+        void set_morph(const std::string& morph, double weight); // present = overrides the game's value
+        void clear_morph(const std::string& morph);              // back to the game's own value
+        void replace_morphs(MorphBook book);
+        void clear_morphs();
+        // Morph names found on the tracked meshes (primary mesh first, no duplicates).
+        void set_morph_names(std::vector<std::string> names);
+        std::vector<std::string> morph_names(uint64_t* revision = nullptr) const;
+        uint64_t morph_names_revision() const { return m_morph_names_revision.load(std::memory_order_acquire); }
+        // Morphs that something else keeps setting (reported by Lua): folded names.
+        void set_animated_morphs(std::set<std::string> folded);
+        std::set<std::string> animated_morphs() const;
 
         SkeletonView skeleton(uint64_t* revision = nullptr) const;
         MirrorTable mirror_table() const;
@@ -155,6 +172,13 @@ namespace uuepbs
 
         PoseLayout m_layout{};
         std::atomic<bool> m_rescan{false};
+
+        mutable std::mutex m_morph_lock; // separate from m_lock: the pose hook never waits on morph edits
+        MorphBook m_morphs;
+        std::atomic<uint64_t> m_morph_revision{1};
+        std::vector<std::string> m_morph_names;
+        std::atomic<uint64_t> m_morph_names_revision{1};
+        std::set<std::string> m_animated_morphs;
 
         MirrorTable m_mirror{};
         std::string m_mirror_source{"not measured yet"};

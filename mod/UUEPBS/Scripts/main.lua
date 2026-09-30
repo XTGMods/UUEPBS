@@ -1,8 +1,9 @@
 -- UUEPBS (Universal Unreal Engine Player Body Sliders) - Lua half
 --
--- Finds the character to edit, reads the bone hierarchy of its skeletal meshes and
--- hands everything to native\UUEPBS.dll through two small text files
+-- Finds the character to edit, reads the bone hierarchy (and morph target names) of its
+-- skeletal meshes and hands everything to native\UUEPBS.dll through two small text files
 -- (the DLL edits the final pose every frame and owns the slider window and presets).
+-- Morph target weights come back from the DLL and are applied here with SetMorphTarget.
 -- The DLL is a plain Windows DLL mapped with package.loadlib, not a UE4SS C++ mod,
 -- so it does not have to match the UE4SS version.
 --
@@ -11,7 +12,7 @@
 -- checks that the objects it already holds are still valid, and it only rewrites the
 -- bridge file when something actually changed.
 
-local VERSION = "2.1.0"
+local VERSION = "2.2.0"
 local TAG = "[UUEPBS] "
 local Config = require("config")
 
@@ -90,6 +91,8 @@ end
 
 local presetFolder = (Config.PresetFolder or "") ~= "" and Config.PresetFolder
     or (win64Dir .. "\\" .. ((Config.PresetFolderName or "") ~= "" and Config.PresetFolderName or "UUEPBS Presets"))
+local skinFolder = (Config.SkinFolder or "") ~= "" and Config.SkinFolder
+    or (win64Dir .. "\\" .. ((Config.SkinFolderName or "") ~= "" and Config.SkinFolderName or "UUEPBS Skins"))
 
 local function read_text(path)
     local f = io.open(path, "rb")
@@ -121,12 +124,14 @@ local profileFileName = profileKey:gsub('[<>:"/\\|?*]', "_") .. ".json"
 local profileFile = profileDir .. "\\" .. profileFileName
 local legacyProfileFile = modsDir .. "\\" .. LEGACY_MOD_FOLDER .. "\\Scripts\\GameProfiles\\" .. profileFileName
 local PROFILE_ORDER = { "Project", "Game", "Target", "TargetClassPath", "PrimaryComponent", "IncludeComponents", "ExcludeComponents",
-    "SameSkeletonOnly", "BodyGroups", "Hook", "_help" }
+    "SameSkeletonOnly", "BodyGroups", "MorphGroups", "ExcludeMorphs", "Hook", "_help" }
 local PROFILE_HELP = "Target: actor class to edit (empty = the pawn you control). TargetClassPath: optional full path of that class. "
     .. "PrimaryComponent: mesh whose bones are listed (empty = the Character's Mesh). Include/ExcludeComponents: mesh names. "
     .. "SameSkeletonOnly: also edit other meshes on the actor that share the primary mesh's skeleton. "
-    .. "BodyGroups: remap Body tab sliders to this game's bones, e.g. {\"Thighs\": [\"Hip_L\", \"Hip_R\"], \"Waist\": [\"Spine1_M\"]} "
-    .. "(real bone names from the Bones tab, * wildcards allowed; [] hides a slider; new names add sliders)."
+    .. "BodyGroups: remap Simplified Panel sliders to this game's bones, e.g. {\"Thighs\": [\"Hip_L\", \"Hip_R\"], \"Waist\": [\"Spine1_M\"]} "
+    .. "(real bone names from the Detailed Panel, * wildcards allowed; [] hides a slider; new names add sliders). "
+    .. "MorphGroups: Simplified Panel sliders for morph targets, e.g. {\"Breasts\": [\"BreastSize*\"]} (names from Detailed Panel > Morphs). "
+    .. "ExcludeMorphs: morph names to hide, e.g. [\"*_corrective*\"]."
 
 -- Games that ship with a ready-made profile (used only when their file does not exist yet).
 local BuiltInProfiles = {
@@ -186,6 +191,8 @@ do
             out.Game = ""
         end
         out.BodyGroups = json.empty_object
+        out.MorphGroups = json.empty_object
+        out.ExcludeMorphs = {}
         pendingProfileText = json.encode_profile(out, PROFILE_ORDER)
         profileStatus = "new"
     end
@@ -474,6 +481,75 @@ local function read_hierarchy(comp, wantReference)
 end
 
 ---------------------------------------------------------------------------
+-- Morph targets (cached per mesh asset)
+---------------------------------------------------------------------------
+local MAX_MORPHS = 1024
+local morphNameCache = {}
+
+-- Names of the mesh asset's morph targets, tab separated, or nil when it has none.
+local function read_morph_names(comp)
+    local mesh = mesh_asset(comp)
+    if not mesh then
+        return nil
+    end
+    local key = mesh_path(comp) or tostring(address_num(mesh))
+    local cached = morphNameCache[key]
+    if cached ~= nil then
+        return cached or nil
+    end
+    local names, seenName = {}, {}
+    pcall(function()
+        local list = mesh.MorphTargets
+        if list == nil then
+            return
+        end
+        local function add(elem)
+            local m = elem
+            if type(elem) ~= "nil" then
+                pcall(function()
+                    if elem.get then
+                        m = elem:get() -- UE4SS hands TArray elements over as RemoteUnrealParam
+                    end
+                end)
+            end
+            if #names < MAX_MORPHS and alive(m) then
+                local n = clean(name_of(m))
+                if n ~= "" and n ~= "?" and n ~= "None" and not seenName[string.lower(n)] then
+                    seenName[string.lower(n)] = true
+                    names[#names + 1] = n
+                end
+            end
+        end
+        if list.ForEach then
+            list:ForEach(function(_, elem)
+                add(elem)
+            end)
+        else
+            for i = 1, math.min(#list, MAX_MORPHS) do
+                add(list[i])
+            end
+        end
+    end)
+    local text = #names > 0 and table.concat(names, "\t") or false
+    morphNameCache[key] = text
+    if text then
+        chatter("%d morph target(s) on %s", #names, key)
+    end
+    return text or nil
+end
+
+local function morph_set(text)
+    if not text then
+        return nil
+    end
+    local set = {}
+    for name in text:gmatch("[^\t]+") do
+        set[string.lower(name)] = name
+    end
+    return set
+end
+
+---------------------------------------------------------------------------
 -- Target selection
 ---------------------------------------------------------------------------
 local pickedId = nil -- address chosen in the window's picker (nil = automatic)
@@ -588,6 +664,9 @@ local function rebuild_rigs_text()
         lines[#lines + 1] = "parents\t" .. r.hierarchy.parents
         if r.primary and r.hierarchy.reference then
             lines[#lines + 1] = "ref\t" .. r.hierarchy.reference
+        end
+        if r.morphs then
+            lines[#lines + 1] = "morphs\t" .. r.morphs
         end
     end
     rigsText = table.concat(lines, "\n")
@@ -724,7 +803,10 @@ local function scan()
         if use then
             local ok, h = pcall(read_hierarchy, comp, isPrimary)
             if ok and h then
-                rigs[#rigs + 1] = { comp = comp, address = address_of(comp), label = label, primary = isPrimary, hierarchy = h }
+                local okm, morphs = pcall(read_morph_names, comp)
+                morphs = okm and morphs or nil
+                rigs[#rigs + 1] = { comp = comp, address = address_of(comp), label = label, primary = isPrimary, hierarchy = h,
+                    morphs = morphs, morphSet = morph_set(morphs) }
             elseif ok then
                 why = "skipped (no mesh assigned / 0 bones)"
             else
@@ -736,8 +818,13 @@ local function scan()
         pcall(function() bones = comp:GetNumBones() or 0 end)
         pcall(function() visible = comp:IsVisible() and "visible" or "hidden" end)
         pcall(function() asset = (mesh_path(comp) or "no mesh"):match("([^/.]+)$") or "?" end)
-        report[#report + 1] = string.format("  mesh %s%s: %s, %d bones, %s, skeleton %s -> %s%s", label,
-            attachedFrom[comp] and (" (attached from " .. attachedFrom[comp] .. ")") or "", asset, bones, visible,
+        local morphCount = 0
+        if rigs[#rigs] and rigs[#rigs].comp == comp and rigs[#rigs].morphs then
+            morphCount = select(2, rigs[#rigs].morphs:gsub("\t", "")) + 1
+        end
+        report[#report + 1] = string.format("  mesh %s%s: %s, %d bones%s, %s, skeleton %s -> %s%s", label,
+            attachedFrom[comp] and (" (attached from " .. attachedFrom[comp] .. ")") or "", asset, bones,
+            morphCount > 0 and (", " .. morphCount .. " morphs") or "", visible,
             (compSkeleton or "?"):match("([^/.]+)$") or "?", why, isPrimary and " (primary)" or "")
     end
     report[#report + 1] = string.format("%s: %d mesh(es) driven", targetInfo.label, #rigs)
@@ -793,6 +880,96 @@ local function needs_rescan()
 end
 
 ---------------------------------------------------------------------------
+-- Applying morph weights
+---------------------------------------------------------------------------
+-- morphWanted: what the DLL asks for (folded name -> { name, weight }). A morph in there
+-- overrides the game's value; one that leaves it gets the value it had before we touched it.
+local morphWanted = {}
+local morphDirty = false -- morphWanted or the tracked meshes changed since the last apply
+local morphApplied = {} -- "<component address>|<folded name>" -> { comp, name, weight, original }
+local morphFights = {} -- folded name -> times something else overwrote our value
+local animatedMorphs = {} -- folded name -> display name (reported to the DLL)
+local animatedText = ""
+
+local function get_morph(comp, name)
+    local ok, v = pcall(function()
+        return comp:GetMorphTarget(FName(name))
+    end)
+    return ok and type(v) == "number" and v or nil
+end
+
+-- removeZero: a 0 weight drops the override so the game's animation drives the morph again.
+local function set_morph(comp, name, weight, removeZero)
+    return pcall(function()
+        comp:SetMorphTarget(FName(name), weight, removeZero and true or false)
+    end)
+end
+
+local function apply_morphs()
+    morphDirty = false
+    local seenSlot = {}
+    for _, r in ipairs(rigs) do
+        if r.morphSet and next(morphWanted) ~= nil and alive(r.comp) then
+            for key, want in pairs(morphWanted) do
+                local name = r.morphSet[key]
+                if name then
+                    local slot = r.address .. "|" .. key
+                    seenSlot[slot] = true
+                    local a = morphApplied[slot]
+                    if not a then
+                        a = { comp = r.comp, name = name, original = get_morph(r.comp, name) or 0 }
+                        morphApplied[slot] = a
+                    end
+                    a.comp = r.comp -- the wrapper from the latest scan
+                    if a.weight ~= want.weight and set_morph(r.comp, name, want.weight, false) then
+                        a.weight = want.weight
+                    end
+                end
+            end
+        end
+    end
+    -- Morphs that are no longer wanted (or whose mesh went away): give them back to the game.
+    for slot, a in pairs(morphApplied) do
+        if not seenSlot[slot] then
+            if alive(a.comp) then
+                set_morph(a.comp, a.name, a.original, a.original == 0)
+            end
+            morphApplied[slot] = nil
+        end
+    end
+end
+
+-- Something else (animation curves, the game's own code) may keep writing a morph we set.
+-- Put ours back and, after a few times, tell the DLL so the window can mark the morph.
+local function watch_morphs()
+    local changed = false
+    for _, a in pairs(morphApplied) do
+        if a.weight ~= nil and alive(a.comp) then
+            local v = get_morph(a.comp, a.name)
+            if v ~= nil and math.abs(v - a.weight) > 1e-3 then
+                set_morph(a.comp, a.name, a.weight, false)
+                local key = string.lower(a.name)
+                morphFights[key] = (morphFights[key] or 0) + 1
+                if morphFights[key] == 3 and not animatedMorphs[key] then
+                    animatedMorphs[key] = a.name
+                    changed = true
+                    say("morph %s keeps being set by the game; the slider is re-applied but may flicker or not stick", a.name)
+                end
+            end
+        end
+    end
+    if changed then
+        local names = {}
+        for _, n in pairs(animatedMorphs) do
+            names[#names + 1] = clean(n)
+        end
+        table.sort(names)
+        animatedText = table.concat(names, "\t")
+        stateDirty = true
+    end
+end
+
+---------------------------------------------------------------------------
 -- Bridge files
 ---------------------------------------------------------------------------
 local session = string.format("%d-%d", os.time(), math.random(100000, 999999))
@@ -813,6 +990,8 @@ local function build_state()
         "setup",
         "version=" .. VERSION,
         "presets=" .. clean(presetFolder),
+        "skins=" .. clean(skinFolder),
+        "skin=" .. clean(Config.Skin or ""),
         "restore=" .. (Config.RestoreLastSession and "1" or "0"),
         "startup=" .. clean(Config.StartupPreset or ""),
         "topmost=" .. (Config.KeepWindowOnTop and "1" or "0"),
@@ -834,6 +1013,9 @@ local function build_state()
         add("cand\t" .. c.id .. "\t" .. clean(c.label))
     end
     add(rigsText)
+    if animatedText ~= "" then
+        add("manim\t" .. animatedText)
+    end
     for _, c in ipairs(pendingCommands) do
         add("cmd\t" .. c.id .. "\t" .. clean(c.verb) .. "\t" .. clean(c.arg))
     end
@@ -865,20 +1047,23 @@ local seen = { rescan = 0, pick = 0, refresh = 0, session = nil }
 local hookState, hookText = "waiting", ""
 local windowOpen = false
 local lastDllText = nil
+local pendingScan, pendingCandidates = false, false -- noticed by the fast morph loop, handled by tick()
 
--- Returns wantScan, wantCandidates (the DLL asked for a rescan / new character list).
+-- Reads bridge_out.txt. Rescan / character list requests are left in pendingScan and
+-- pendingCandidates; new morph weights set morphDirty.
 local function read_dll_state()
     local f = io.open(outFile, "rb")
     if not f then
-        return false, false
+        return
     end
     local text = f:read("a")
     f:close()
     if not text or text == lastDllText or not text:find("\n#end\n", 1, true) then
-        return false, false
+        return
     end
     lastDllText = text
     local wantScan, wantCandidates = false, false
+    local wanted, sawMorphs = {}, false
     local dllSession = text:match("^UBS1 (%S+)")
     if dllSession ~= seen.session then
         -- New DLL session: take its counters as the baseline.
@@ -933,6 +1118,13 @@ local function read_dll_state()
                 end
                 hookState, hookText = a, b
             end
+        elseif kind == "morph" then
+            sawMorphs = true
+        elseif kind == "mw" then
+            local w = tonumber(b)
+            if a ~= "" and w then
+                wanted[string.lower(a)] = { name = a, weight = w }
+            end
         elseif kind == "reply" and mine then
             local id = tonumber(a)
             if id and awaitingReply[id] then
@@ -949,7 +1141,12 @@ local function read_dll_state()
         wantCandidates = true -- the picker is about to be looked at
     end
     windowOpen = open
-    return wantScan, wantCandidates
+    if sawMorphs then
+        morphWanted = wanted
+        morphDirty = true
+    end
+    pendingScan = pendingScan or wantScan
+    pendingCandidates = pendingCandidates or wantCandidates
 end
 
 local function send_command(verb, arg, echo)
@@ -991,7 +1188,9 @@ local function tick()
         if pendingProfileText then
             flush_profile()
         end
-        local wantScan, wantCandidates = read_dll_state()
+        read_dll_state()
+        local wantScan, wantCandidates = pendingScan, pendingCandidates
+        pendingScan, pendingCandidates = false, false
         if wantCandidates then
             candidatesDue = 0
         end
@@ -1008,12 +1207,18 @@ local function tick()
         if scanDue and t >= scanDue then
             scanDue = nil
             scan()
+            morphDirty = true -- new or re-found meshes get the morph weights too
             watchDue = t + WATCH_MS
         elseif t >= watchDue then
             watchDue = t + WATCH_MS
             if needs_rescan() then
                 schedule_scan(300)
             end
+        end
+        if morphDirty then
+            apply_morphs()
+        elseif next(morphApplied) ~= nil then
+            watch_morphs()
         end
         write_state()
     end)
@@ -1022,13 +1227,39 @@ local function tick()
     end
 end
 
-if type(LoopInGameThreadWithDelay) == "function" then
-    LoopInGameThreadWithDelay(POLL_MS, tick)
-else
-    LoopAsync(POLL_MS, function()
-        ExecuteInGameThread(tick)
-        return false
+-- While the window is open, morph slider drags are picked up every MorphPollMs instead of
+-- waiting for the next PollIntervalMs tick. It only reads one small file, and does nothing
+-- at all while the window is closed.
+local MORPH_MS = tonumber(Config.MorphPollMs) or 100
+local function morph_tick()
+    if not windowOpen then
+        return
+    end
+    local ok, err = pcall(function()
+        read_dll_state()
+        if morphDirty then
+            apply_morphs()
+        end
     end)
+    if not ok then
+        say("morph tick error: %s", tostring(err))
+    end
+end
+
+local function every(ms, fn)
+    if type(LoopInGameThreadWithDelay) == "function" then
+        LoopInGameThreadWithDelay(ms, fn)
+    else
+        LoopAsync(ms, function()
+            ExecuteInGameThread(fn)
+            return false
+        end)
+    end
+end
+
+every(POLL_MS, tick)
+if MORPH_MS > 0 and MORPH_MS < POLL_MS then
+    every(math.max(33, MORPH_MS), morph_tick)
 end
 
 local function world_changed()
@@ -1064,7 +1295,7 @@ local function rest_of(params, first)
     return table.concat(parts, " ")
 end
 
-local usage = "uuepbs (or ubs) ui | status | rescan | list | load <name> | save <name> | on | off | reset | diag"
+local usage = "uuepbs (or ubs) ui | status | rescan | list | load <name> | save <name> | on | off | reset | diag | skin [name] | morph <name> [weight]"
 
 local function console(_, params, out)
     local verb = string.lower(params[1] or "")
@@ -1085,7 +1316,7 @@ local function console(_, params, out)
         reply(string.format("script v%s, game '%s', profile '%s', character '%s', %d mesh(es), hook %s", VERSION, projectName, Profile.name,
             targetInfo.label, #rigs, hookState))
         send_command("status", "", true)
-    elseif verb == "load" or verb == "save" then
+    elseif verb == "load" or verb == "save" or verb == "skin" or verb == "morph" then
         send_command(verb, rest_of(params, 2), true)
     elseif verb == "list" or verb == "on" or verb == "off" or verb == "reset" or verb == "diag" then
         send_command(verb, "", true)

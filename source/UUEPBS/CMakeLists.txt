@@ -49,12 +49,15 @@ add_library(UUEPBS SHARED
     src/core/body_groups.cpp
     src/core/bridge.cpp
     src/core/mirror.cpp
+    src/core/morphs.cpp
     src/core/presets.cpp
     src/core/registry.cpp
     src/core/resolver.cpp
     src/core/rig_names.cpp
     src/core/sculpt.cpp
+    src/ui/image_decode.cpp
     src/ui/panel_view.cpp
+    src/ui/skin.cpp
     src/ui/soft_raster.cpp
     src/win/pose_hook.cpp
     src/win/slider_window.cpp)

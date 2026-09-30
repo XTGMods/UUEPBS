@@ -3,6 +3,7 @@
 #include "sculpt.hpp"
 
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -180,6 +181,26 @@ namespace uuepbs::bridge
                     }
                 }
             }
+            else if (kind == "morphs" && rig)
+            {
+                for (size_t k = 1; k < f.size(); ++k)
+                {
+                    if (!f[k].empty())
+                    {
+                        rig->morphs.emplace_back(f[k]);
+                    }
+                }
+            }
+            else if (kind == "manim")
+            {
+                for (size_t k = 1; k < f.size(); ++k)
+                {
+                    if (!f[k].empty())
+                    {
+                        state.animated_morphs.emplace_back(f[k]);
+                    }
+                }
+            }
             else if (kind == "cmd" && f.size() >= 3)
             {
                 Command c;
@@ -249,6 +270,13 @@ namespace uuepbs::bridge
         for (const Reply& r : s.replies)
         {
             out += "reply\t" + std::to_string(r.id) + "\t" + escape_lines(r.text) + "\n";
+        }
+        out += "morph\t" + std::to_string(s.morph_revision) + "\n";
+        for (const auto& [name, weight] : s.morphs)
+        {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.4f", weight);
+            out += "mw\t" + clean_field(name) + "\t" + buf + "\n";
         }
         out += "#end\n";
         return out;

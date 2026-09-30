@@ -1,0 +1,145 @@
+{
+  "format": "UUEPBS skin",
+  "version": 1,
+  "name": "Midnight Rose",
+  "author": "XTGMods",
+  "description": "Example skin: glass panels over a night-sky background. Copy the folder, rename it and edit freely.",
+  "colors": {
+    "accent": "#E870A8",
+    "accent_dim": "#8E3E6C",
+    "title": "#FFB0D2",
+    "good": "#7FE0A0",
+    "warn": "#FFC060",
+    "muted": "#A8A2C0",
+    "text": "#F4EEF8",
+    "window": "#0E0E1C",
+    "panel": "#15132680",
+    "popup": "#1A1830F5",
+    "border": "#FFFFFF22",
+    "separator": "#FFFFFF1E",
+    "frame": "#0C0B18D0",
+    "frame_hover": "#221C38E0",
+    "frame_active": "#2E2248F0",
+    "header": "#E870A83A",
+    "header_hover": "#E870A866",
+    "header_active": "#E870A899",
+    "text_selected": "#E870A860",
+    "scrollbar_bg": "#00000030",
+    "scrollbar_grab": "#FFFFFF30",
+    "scrollbar_grab_hover": "#E870A880",
+    "scrollbar_grab_active": "#E870A8C0"
+  },
+  "style": {
+    "frame_rounding": 7,
+    "child_rounding": 9,
+    "grab_rounding": 9,
+    "tab_rounding": 8,
+    "child_border": 0,
+    "frame_padding": [
+      10,
+      6
+    ],
+    "item_spacing": [
+      9,
+      7
+    ],
+    "logo_height": 1.5
+  },
+  "images": {
+    "background": {
+      "file": "background.jpg",
+      "mode": "cover",
+      "tint": "#FFFFFFE6"
+    },
+    "header": {
+      "file": "header.png",
+      "mode": "stretch"
+    },
+    "logo": "logo.png",
+    "panel": {
+      "file": "panel.png",
+      "slice": 10
+    },
+    "button": {
+      "file": "button.png",
+      "slice": 8
+    },
+    "button_hover": {
+      "file": "button_hover.png",
+      "slice": 8
+    },
+    "button_active": {
+      "file": "button_active.png",
+      "slice": 8
+    },
+    "slider_track": {
+      "file": "track.png",
+      "slice": [
+        11,
+        11,
+        11,
+        11
+      ]
+    },
+    "slider_fill": {
+      "file": "fill.png",
+      "slice": [
+        11,
+        11,
+        11,
+        11
+      ]
+    },
+    "slider_grab": "grab.png",
+    "slider_grab_active": "grab_active.png",
+    "checkbox": "check_off.png",
+    "checkbox_checked": "check_on.png",
+    "tab": {
+      "file": "tab.png",
+      "slice": [
+        9,
+        9,
+        9,
+        4
+      ]
+    },
+    "tab_hover": {
+      "file": "tab_hover.png",
+      "slice": [
+        9,
+        9,
+        9,
+        4
+      ]
+    },
+    "tab_active": {
+      "file": "tab_active.png",
+      "slice": [
+        9,
+        9,
+        9,
+        4
+      ]
+    }
+  },
+  "icons": {
+    "simplified": "icons/body.png",
+    "detailed": "icons/bones.png",
+    "presets": "icons/presets.png",
+    "status": "icons/status.png",
+    "bones": "icons/bones.png",
+    "morphs": "icons/morphs.png",
+    "reset": "icons/reset.png",
+    "refresh": "icons/refresh.png",
+    "xyz": "icons/xyz.png",
+    "save": "icons/save.png",
+    "load": "icons/load.png",
+    "delete": "icons/delete.png",
+    "folder": "icons/folder.png",
+    "group.Breasts": "icons/group_breasts.png",
+    "group.Hips": "icons/group_hips.png",
+    "group.Thighs": "icons/group_thighs.png",
+    "group.Waist": "icons/group_waist.png",
+    "group.Head": "icons/group_head.png"
+  }
+}

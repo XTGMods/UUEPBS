@@ -486,6 +486,89 @@ namespace uuepbs
     void Registry::set_enabled(bool on)
     {
         m_enabled.store(on, std::memory_order_relaxed);
+        m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    MorphBook Registry::morphs(uint64_t* revision) const
+    {
+        std::lock_guard guard(m_morph_lock);
+        if (revision)
+        {
+            *revision = m_morph_revision.load(std::memory_order_acquire);
+        }
+        return m_morphs;
+    }
+
+    void Registry::set_morph(const std::string& morph, double weight)
+    {
+        if (morph.empty())
+        {
+            return;
+        }
+        std::lock_guard guard(m_morph_lock);
+        MorphEntry& e = m_morphs[fold_case(morph)];
+        e.name = morph;
+        e.weight = clamp_morph(weight);
+        m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void Registry::clear_morph(const std::string& morph)
+    {
+        std::lock_guard guard(m_morph_lock);
+        if (m_morphs.erase(fold_case(morph)) > 0)
+        {
+            m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
+        }
+    }
+
+    void Registry::replace_morphs(MorphBook book)
+    {
+        for (auto& [key, e] : book)
+        {
+            e.weight = clamp_morph(e.weight);
+        }
+        std::lock_guard guard(m_morph_lock);
+        m_morphs = std::move(book);
+        m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void Registry::clear_morphs()
+    {
+        std::lock_guard guard(m_morph_lock);
+        m_morphs.clear();
+        m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void Registry::set_morph_names(std::vector<std::string> names)
+    {
+        std::lock_guard guard(m_morph_lock);
+        if (names != m_morph_names)
+        {
+            m_morph_names = std::move(names);
+            m_morph_names_revision.fetch_add(1, std::memory_order_acq_rel);
+        }
+    }
+
+    std::vector<std::string> Registry::morph_names(uint64_t* revision) const
+    {
+        std::lock_guard guard(m_morph_lock);
+        if (revision)
+        {
+            *revision = m_morph_names_revision.load(std::memory_order_acquire);
+        }
+        return m_morph_names;
+    }
+
+    void Registry::set_animated_morphs(std::set<std::string> folded)
+    {
+        std::lock_guard guard(m_morph_lock);
+        m_animated_morphs = std::move(folded);
+    }
+
+    std::set<std::string> Registry::animated_morphs() const
+    {
+        std::lock_guard guard(m_morph_lock);
+        return m_animated_morphs;
     }
 
     SkeletonView Registry::skeleton(uint64_t* revision) const

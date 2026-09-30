@@ -228,12 +228,13 @@ namespace uuepbs
         return !m_folder.empty() && (fs::exists(file_for(name), ec) || fs::exists(legacy_file_for(name), ec));
     }
 
-    std::string PresetShelf::serialize(const EditBook& book)
+    std::string PresetShelf::serialize(const EditBook& book, const MorphBook* morphs)
     {
+        const bool with_morphs = morphs && !morphs->empty();
         std::string out;
         out += "{\n";
         out += "  \"format\": \"UUEPBS preset\",\n";
-        out += "  \"version\": 2,\n";
+        out += with_morphs ? "  \"version\": 3,\n" : "  \"version\": 2,\n";
         out += "  \"help\": \"length = along the bone (X), width = Y, depth = Z (1 = unchanged). "
                "rotate = degrees about X, Y, Z. move = cm along X, Y, Z. children: scale_too | keep_size | this_bone_only\",\n";
         out += "  \"bones\": {";
@@ -262,13 +263,29 @@ namespace uuepbs
             }
             out += ", \"children\": \"" + std::string(children_word(e.spread)) + "\" }";
         }
-        out += first ? "}\n" : "\n  }\n";
-        out += "}\n";
+        out += first ? "}" : "\n  }";
+        if (with_morphs)
+        {
+            out += ",\n  \"morphs\": {";
+            bool first_morph = true;
+            for (const auto& [key, m] : *morphs)
+            {
+                out += first_morph ? "\n" : ",\n";
+                first_morph = false;
+                out += "    " + json_escape(m.name) + ": " + json_number(m.weight);
+            }
+            out += "\n  }";
+        }
+        out += "\n}\n";
         return out;
     }
 
-    bool PresetShelf::parse(const std::string& text, EditBook& out, std::string& message)
+    bool PresetShelf::parse(const std::string& text, EditBook& out, std::string& message, MorphBook* morphs)
     {
+        if (morphs)
+        {
+            morphs->clear();
+        }
         std::string_view body = text;
         if (body.size() >= 3 && body.substr(0, 3) == "\xEF\xBB\xBF") // UTF-8 BOM from Notepad
         {
@@ -276,10 +293,10 @@ namespace uuepbs
         }
         const std::string head = trim(body.substr(0, 64));
         const bool looks_json = !head.empty() && head[0] == '{';
-        return looks_json ? parse_json(text, out, message) : parse_legacy(text, out, message);
+        return looks_json ? parse_json(text, out, message, morphs) : parse_legacy(text, out, message);
     }
 
-    bool PresetShelf::parse_json(const std::string& text, EditBook& out, std::string& message)
+    bool PresetShelf::parse_json(const std::string& text, EditBook& out, std::string& message, MorphBook* morphs)
     {
         out.clear();
         JsonValue root;
@@ -295,13 +312,38 @@ namespace uuepbs
             return false;
         }
         const JsonValue* bones = root.find("bones");
-        if (!bones || bones->kind != JsonValue::Kind::Object)
+        const JsonValue* morph_section = root.find("morphs");
+        const bool has_morphs = morph_section && morph_section->kind == JsonValue::Kind::Object;
+        if ((!bones || bones->kind != JsonValue::Kind::Object) && !has_morphs)
         {
             message = "missing the \"bones\": { ... } section";
             return false;
         }
+        JsonValue no_bones;
+        no_bones.kind = JsonValue::Kind::Object;
+        if (!bones || bones->kind != JsonValue::Kind::Object)
+        {
+            bones = &no_bones; // a morph-only preset
+        }
 
         int skipped = 0;
+        size_t morph_count = 0;
+        if (has_morphs)
+        {
+            for (const auto& [name, v] : morph_section->members)
+            {
+                if (name.empty() || v.kind != JsonValue::Kind::Number)
+                {
+                    ++skipped;
+                    continue;
+                }
+                ++morph_count;
+                if (morphs)
+                {
+                    (*morphs)[fold_case(name)] = MorphEntry{name, clamp_morph(v.number)};
+                }
+            }
+        }
         for (const auto& [bone, v] : bones->members)
         {
             if (bone.empty() || v.kind != JsonValue::Kind::Object)
@@ -403,6 +445,10 @@ namespace uuepbs
             out[fold_case(bone)] = entry;
         }
         message = std::to_string(out.size()) + " bone(s)";
+        if (morph_count > 0)
+        {
+            message += ", " + std::to_string(morph_count) + " morph(s)";
+        }
         if (skipped > 0)
         {
             message += ", " + std::to_string(skipped) + " unreadable entr" + (skipped == 1 ? "y" : "ies") + " ignored";
@@ -488,7 +534,7 @@ namespace uuepbs
         return true;
     }
 
-    bool PresetShelf::save(const std::string& name, const EditBook& book, std::string& message) const
+    bool PresetShelf::save(const std::string& name, const EditBook& book, std::string& message, const MorphBook* morphs) const
     {
         const std::string clean = clean_name(name);
         if (clean.empty() || m_folder.empty())
@@ -509,7 +555,7 @@ namespace uuepbs
                 message = "Could not write " + path_to_utf8(temp);
                 return false;
             }
-            const std::string body = serialize(book);
+            const std::string body = serialize(book, morphs);
             f.write(body.data(), static_cast<std::streamsize>(body.size()));
             if (!f)
             {
@@ -530,7 +576,7 @@ namespace uuepbs
         return true;
     }
 
-    bool PresetShelf::load(const std::string& name, EditBook& out, std::string& message) const
+    bool PresetShelf::load(const std::string& name, EditBook& out, std::string& message, MorphBook* morphs) const
     {
         const std::string clean = clean_name(name);
         std::error_code ec;
@@ -544,7 +590,7 @@ namespace uuepbs
         std::ostringstream ss;
         ss << f.rdbuf();
         std::string detail;
-        if (!parse(ss.str(), out, detail))
+        if (!parse(ss.str(), out, detail, morphs))
         {
             message = "Preset '" + clean + "' could not be read: " + detail;
             return false;

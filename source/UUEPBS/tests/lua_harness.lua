@@ -40,7 +40,13 @@ end
 
 local skeleton = obj("Skeleton /Game/ROKUv3/SK_Roku_v3_Skeleton.SK_Roku_v3_Skeleton")
 local otherSkeleton = obj("Skeleton /Game/Hair/SK_Fringe_Skeleton.SK_Fringe_Skeleton")
-local bodyMesh = obj("SkeletalMesh /Game/ROKUv3/SK_Roku_v3.SK_Roku_v3", { Skeleton = skeleton })
+-- Morph targets as UE4SS hands them over: a TArray with ForEach(index, RemoteUnrealParam).
+local function morph_list(names)
+    local list = {}
+    for i, n in ipairs(names) do list[i] = obj("MorphTarget /Game/ROKUv3/SK_Roku_v3." .. n) end
+    return { ForEach = function(_, fn) for i, m in ipairs(list) do fn(i - 1, { get = function() return m end }) end end }
+end
+local bodyMesh = obj("SkeletalMesh /Game/ROKUv3/SK_Roku_v3.SK_Roku_v3", { Skeleton = skeleton, MorphTargets = morph_list({ "BreastSize", "Belly", "Smile" }) })
 local shirtMesh = obj("SkeletalMesh /Game/ROKUv3/Clothes/SK_Shirt.SK_Shirt", { Skeleton = skeleton })
 local hairMesh = obj("SkeletalMesh /Game/Hair/SK_Fringe.SK_Fringe", { Skeleton = otherSkeleton })
 
@@ -48,7 +54,7 @@ local actor = obj("BP_Rokuv3_C /Game/Maps/Lvl.Lvl:PersistentLevel.BP_Rokuv3_C_0"
 local npc = obj("BP_Guard_C /Game/Maps/Lvl.Lvl:PersistentLevel.BP_Guard_C_3")
 local cdo = obj("BP_Guard_C /Game/Chars/BP_Guard.Default__BP_Guard_C")
 
-local refCalls, scanCalls, searches = 0, 0, 0
+local refCalls, scanCalls, searches, morphReads, morphWrites = 0, 0, 0, 0, 0
 local function comp(name, outer, mesh, names, parents, withRef)
     local c = obj("SkeletalMeshComponent /Game/Maps/Lvl.Lvl:PersistentLevel." .. name)
     c.GetFName = function() return FNameObj(name) end
@@ -64,6 +70,12 @@ local function comp(name, outer, mesh, names, parents, withRef)
             end
         end
         return FNameObj("None")
+    end
+    c._morphs = {}
+    c.GetMorphTarget = function(_, f) morphReads = morphReads + 1; return c._morphs[f._s] or 0 end
+    c.SetMorphTarget = function(_, f, w, removeZero)
+        morphWrites = morphWrites + 1
+        if removeZero and w == 0 then c._morphs[f._s] = nil else c._morphs[f._s] = w end
     end
     if withRef then
         c.GetRefPoseTransform = function(_, i)
@@ -87,14 +99,21 @@ local pc = obj("BP_PlayerController_C /Game/Maps/Lvl.Lvl:PersistentLevel.BP_Play
 
 -- mocked UE4SS globals
 UnrealVersion = { GetMajor = function() return 5 end, GetMinor = function() return 7 end }
-local loop, console, notify = nil, {}, nil
+local loop, fast, console, notify = nil, nil, {}, nil
+function FName(s) return FNameObj(s) end
 -- os.clock is wall time under the MSVC runtime the game uses; simulate 250 ms per tick.
 local fakeNow = 0
 os.clock = function() return fakeNow end
 local pollMs
+local fastMs
 function LoopInGameThreadWithDelay(ms, fn)
-    pollMs = ms
-    loop = function() fakeNow = fakeNow + ms / 1000; fn() end
+    if not loop then
+        pollMs = ms
+        loop = function() fakeNow = fakeNow + ms / 1000; fn() end
+    else
+        fastMs = ms -- the morph loop (runs only while the window is open)
+        fast = function() fakeNow = fakeNow + ms / 1000; fn() end
+    end
     return 1
 end
 function NotifyOnNewObject(path, fn) notify = fn end
@@ -117,12 +136,16 @@ debug.getinfo = function() return { source = "@" .. scriptPath } end
 local modPrefix = project .. "\\Binaries\\Win64\\ue4ss\\Mods\\UUEPBS\\"
 local legacyPrefix = project .. "\\Binaries\\Win64\\ue4ss\\Mods\\XTGBodySlider\\"
 local realOpen, realRemove = io.open, os.remove
+local outReads = 0
 local function map(p)
     if p:sub(1, #modPrefix) == modPrefix then return work .. "/" .. p:sub(#modPrefix + 1):gsub("\\", "/") end
     if p:sub(1, #legacyPrefix) == legacyPrefix then return work .. "/legacy/" .. p:sub(#legacyPrefix + 1):gsub("\\", "/") end
     return p
 end
-io.open = function(p, m) return realOpen(map(p), m) end
+io.open = function(p, m)
+    if p:find("bridge_out.txt", 1, true) then outReads = outReads + 1 end
+    return realOpen(map(p), m)
+end
 os.remove = function(p) return realRemove(map(p)) end
 os.execute("rm -rf " .. work .. "/native " .. work .. "/Scripts " .. work .. "/legacy && mkdir -p " .. work .. "/native")
 local legacyText = '{\n  // my notes survive the move\n  "Project": "SomeGame",\n  "PrimaryComponent": "CharacterMesh0",\n  "Hook": { "Slot": 303, "Buffers": "0x5A8", "ReadIndex": "0x674" },\n}\n'
@@ -144,9 +167,9 @@ local printed = {}
 local realPrint = print
 print = function(s) printed[#printed + 1] = s end
 
-local function run_peer(rescan, pick, pickId, refresh, session, ui)
+local function run_peer(rescan, pick, pickId, refresh, session, ui, morphs)
     local report = work .. "/peer_report.txt"
-    os.execute(string.format("%s %s/native %d %d %s %d %s %d > %s", peer, work, rescan, pick, pickId, refresh, session or "dll1", ui or 0, report))
+    os.execute(string.format('%s %s/native %d %d %s %d %s %d "%s" > %s', peer, work, rescan, pick, pickId, refresh, session or "dll1", ui or 0, morphs or "-", report))
     local h = realOpen(report, "rb")
     local out = h:read("a")
     h:close()
@@ -173,6 +196,7 @@ end
 check(loaded and loaded[1] == project .. "\\Binaries\\Win64\\ue4ss\\Mods\\UUEPBS\\native\\UUEPBS.dll" and loaded[2] == "*", "loadlib path")
 check(loop and console.uuepbs and console.ubs and not console.xbs, "registrations")
 check(pollMs == 400, "poll interval " .. tostring(pollMs))
+check(fast and fastMs == 100, "morph loop registered at 100 ms: " .. tostring(fastMs))
 
 loop()
 local s = run_peer(0, 0, "none", 0)
@@ -197,6 +221,8 @@ else
     check(s:find("rig %x+ CharacterMesh0 primary=1 owner=BP_Guard_C_3 %(player%) bones=184 parents=184 ref=0"), "generic: player pawn, no reference pose:\n" .. s)
 end
 check(s:find("candidates 2\n", 1, true), "two candidates (class default object skipped):\n" .. s)
+check(s:find("morphs CharacterMesh0 3 BreastSize Belly Smile\n", 1, true), "morph names of the body mesh:\n" .. s)
+check(not s:find("morphs C_shirt1", 1, true), "mesh without morph targets sends none")
 check(refCalls == (mode == "gon" and 184 or 0), "reference read once for the primary mesh: " .. refCalls)
 
 -- console command round trip
@@ -228,6 +254,45 @@ for _ = 1, 20 do loop() end
 searchesBefore = searches
 for _ = 1, 40 do loop() end
 check(searches == searchesBefore, "no searches after the window closed")
+
+-- morph targets: the fast loop does nothing while the window is closed
+local readsBefore = outReads
+for _ = 1, 10 do fast() end
+check(outReads == readsBefore, "morph loop idle while the window is closed")
+check(morphWrites == 0 and morphReads == 0, "no morph calls before any morph is set")
+
+local drv = mode == "gon" and body or guardBody -- the driven character's body mesh
+local otherBody = mode == "gon" and guardBody or body
+-- window open + a slider moved: the fast loop applies it, keeping the game's own value to restore
+drv._morphs.BreastSize = 0.1 -- the game's character creator set this one
+run_peer(0, 0, "none", 0, "dll1", 1)
+loop() -- the regular tick notices the open window
+run_peer(0, 0, "none", 0, "dll1", 1, "BreastSize=0.8,Belly=0.25")
+fast()
+check(drv._morphs.BreastSize == 0.8 and drv._morphs.Belly == 0.25, "morphs applied by the fast loop: " .. tostring(drv._morphs.BreastSize))
+check(shirt._morphs.BreastSize == nil and otherBody._morphs.BreastSize == nil, "only driven meshes that have the morph are touched")
+local writes = morphWrites
+fast()
+loop()
+check(morphWrites == writes, "unchanged weights are not re-sent")
+
+-- the game keeps overwriting Belly: put back each time, reported after three times
+for _ = 1, 3 do
+    drv._morphs.Belly = 0
+    loop()
+    check(drv._morphs.Belly == 0.25, "morph put back after the game overwrote it")
+end
+s = run_peer(0, 0, "none", 0, "dll1", 1, "BreastSize=0.8,Belly=0.25")
+check(s:find("manim Belly\n", 1, true), "fought-over morph reported to the DLL:\n" .. s)
+
+-- slider reset (morph no longer sent): the game's values come back
+run_peer(0, 0, "none", 0, "dll1", 0, "-")
+loop()
+check(drv._morphs.BreastSize == 0.1, "game's own value restored: " .. tostring(drv._morphs.BreastSize))
+check(drv._morphs.Belly == nil, "morph the game never set is handed back entirely")
+writes, readsBefore = morphWrites, morphReads
+for _ = 1, 20 do loop() end
+check(morphWrites == writes and morphReads == readsBefore, "no morph calls while none is set")
 
 -- DLL asks for a rescan
 run_peer(1, 0, "none", 0)

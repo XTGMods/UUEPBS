@@ -24,13 +24,26 @@ Host-side tests (Linux/macOS/WSL with g++ 13+ or clang 17+). None of them need W
     for m in generic nodir broken legacy; do lua lua_harness.lua ../../../mod/UUEPBS/Scripts ./bridge_peer /tmp/uuepbs $m; done
     # the harness also fails if the script searches the object array or rewrites bridge_in.txt while idle
 
+    # window skins: skin.json parsing, image decoding and limits (needs Dear ImGui 1.92.1 sources in IMGUI=...)
+    g++ -std=c++23 -I$S -I$IMGUI test_skin.cpp $S/ui/skin.cpp $S/ui/image_decode.cpp $S/core/*.cpp \
+        $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp -o test_skin
+    ./test_skin ../../../skins
+
     # UI preview + CPU renderer check (needs Dear ImGui 1.92.1 sources in IMGUI=...)
-    # Renders every tab with a reference rasteriser and with src/ui/soft_raster.cpp,
-    # fails if they differ, and prints ms per drawn frame and per skipped (unchanged) frame.
-    g++ -std=c++23 -O2 -I$S -I$IMGUI ui_preview.cpp $S/ui/panel_view.cpp $S/ui/soft_raster.cpp $S/core/*.cpp \
+    # Renders every tab (Simplified, Detailed > Bones, Detailed > Morphs, Presets, Status) with a reference
+    # rasteriser and with src/ui/soft_raster.cpp, first with the built-in look, then with the example skin
+    # (written into a fresh skins folder the way the DLL does it). Fails if the two differ, if a frame drawn
+    # from the quad cache differs from the first draw, or if switching skins leaks textures.
+    # Prints ms for the first draw, per drawn frame and per skipped (unchanged) frame.
+    g++ -std=c++23 -O2 -I$S -I$IMGUI ui_preview.cpp $S/ui/panel_view.cpp $S/ui/soft_raster.cpp $S/ui/skin.cpp $S/ui/image_decode.cpp $S/core/*.cpp \
         $IMGUI/imgui.cpp $IMGUI/imgui_draw.cpp $IMGUI/imgui_tables.cpp $IMGUI/imgui_widgets.cpp -o ui_preview
-    ./ui_preview 1.25        # writes preview_*.ppm and soft_preview_*.ppm (font path inside is Linux-specific)
+    ./ui_preview 1.25        # writes preview_*.ppm, skin_preview_*.ppm and soft_*.ppm (font path inside is Linux-specific)
 
 After editing Scripts/BoneDictionary.json, regenerate the DLL's built-in copy:
 
     python ../tools/gen_dictionary_inc.py
+
+After changing the example skin (skins/Example - Midnight Rose, drawn by tools/gen_example_skin.py with Pillow),
+re-embed it into the DLL:
+
+    python ../tools/gen_example_skin.py && python ../tools/gen_skin_inc.py

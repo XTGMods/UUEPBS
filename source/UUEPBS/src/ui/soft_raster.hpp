@@ -39,6 +39,7 @@ namespace uuepbs::ui
         {
             size_t triangles{};
             size_t fast_rects{};
+            size_t cached_quads{}; // large images blended from the quad cache
         };
         const Stats& stats() const { return m_stats; }
 
@@ -55,8 +56,40 @@ namespace uuepbs::ui
                            ImU32 col);
         void triangle(const Clip& c, const ImTextureData* tex, const ImDrawVert& a, const ImDrawVert& b, const ImDrawVert& d);
 
+        struct Column
+        {
+            int a, b, w; // byte offsets of the two texels, weight of the second (0..256)
+        };
+
+        // Large scaled images (skin backgrounds and panels) are sampled once and reused while the
+        // same quad keeps being drawn; later frames only blend the cached colours.
+        struct QuadKey
+        {
+            const void* tex;
+            float x0, y0, x1, y1, u0, v0, u1, v1;
+            ImU32 col;
+            int fx, lx, fy, ly;
+            uint32_t under; // 0x1RRGGBB when drawn over a buffer of one flat colour, else 0
+            bool operator==(const QuadKey&) const = default;
+        };
+        struct QuadEntry
+        {
+            QuadKey key;
+            std::vector<uint32_t> argb; // alpha on top, colour premultiplied (or final colour when opaque)
+            bool opaque{};
+            uint64_t last_used{};
+        };
+        const QuadEntry* find_quad(const QuadKey& key);
+        void blit_quad(const QuadEntry& e);
+
         int m_width{};
         int m_height{};
+        std::vector<Column> m_cols; // scratch for scaled images
+        std::vector<QuadEntry> m_quads;
+        size_t m_quad_bytes{};
+        uint64_t m_frame_no{};
+        bool m_uniform{};       // every pixel still has m_uniform_rgb (just cleared / filled)
+        uint32_t m_uniform_rgb{};
         std::vector<uint32_t> m_pixels;
         ImVec2 m_white_uv{};
         Stats m_stats{};

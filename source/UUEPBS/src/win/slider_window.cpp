@@ -3,6 +3,7 @@
 #include "../core/presets.hpp"
 #include "../core/registry.hpp"
 #include "../ui/panel_view.hpp"
+#include "../ui/skin.hpp"
 #include "../ui/soft_raster.hpp"
 #include "pose_hook.hpp"
 
@@ -92,6 +93,9 @@ namespace uuepbs::ui
 
         std::string s_renderer_text = "starting";
 
+        std::mutex s_skins_lock;
+        std::filesystem::path s_skins_folder; // for list_skins() from other threads
+
         class Panel final : public PanelHost
         {
           public:
@@ -117,6 +121,10 @@ namespace uuepbs::ui
                 }
                 m_shelf = shelf;
                 m_options = options;
+                {
+                    std::lock_guard guard(s_skins_lock);
+                    s_skins_folder = options.skins_folder;
+                }
                 m_view.configure(shelf, this, options.targets, options.version, options.topmost);
                 m_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
                 m_thread = CreateThread(nullptr, 0, &Panel::entry, this, 0, &m_thread_id);
@@ -156,9 +164,14 @@ namespace uuepbs::ui
             void set_message(const std::string& text)
             {
                 m_view.set_message(text);
+                wake();
+            }
+
+            void wake()
+            {
                 if (m_wake)
                 {
-                    SetEvent(m_wake); // lets a hidden window notice new edits and autosave them
+                    SetEvent(m_wake); // lets a hidden window notice new edits (autosave) and skin requests
                 }
             }
 
@@ -383,6 +396,8 @@ namespace uuepbs::ui
                 io.LogFilename = nullptr;
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
                 load_fonts();
+                skin().set_folder(m_options.skins_folder, m_options.skin); // loaded by the first skin().update()
+                m_skin_dirty = skin().update();
                 apply_style();
                 ImGui_ImplWin32_Init(m_hwnd);
                 if (m_cpu)
@@ -395,7 +410,7 @@ namespace uuepbs::ui
                 }
                 s_renderer_text = m_cpu ? (m_gpu_failed ? "CPU (GPU window could not be created)" : "CPU (no Direct3D in use)") : "GPU (Direct3D 11)";
 
-                m_saved_revision = Registry::instance().edit_revision();
+                m_saved_revision = saved_key();
 
                 while (!m_quit.load())
                 {
@@ -407,6 +422,7 @@ namespace uuepbs::ui
                         MsgWaitForMultipleObjects(1, &m_wake, FALSE, timeout, QS_ALLINPUT);
                         pump();
                         autosave();
+                        m_skin_dirty = skin().update() || m_skin_dirty; // "ubs skin" while the window is closed
                         continue;
                     }
 
@@ -438,6 +454,7 @@ namespace uuepbs::ui
                     ImGui_ImplDX11_Shutdown();
                 }
                 ImGui_ImplWin32_Shutdown();
+                skin().shutdown(); // after the backend released the textures, before the context goes
                 ImGui::DestroyContext(m_imgui);
                 m_imgui = nullptr;
                 destroy_device();
@@ -448,11 +465,21 @@ namespace uuepbs::ui
 
             void build_ui()
             {
-                if (m_restyle)
+                const std::string before = skin().status();
+                m_skin_dirty = skin().update() || m_skin_dirty;
+                if (m_skin_dirty && skin().status() != before)
                 {
-                    m_dpi = std::max(1.0f, ImGui_ImplWin32_GetDpiScaleForHwnd(m_hwnd)) * m_options.extra_scale;
+                    m_view.set_message("Window skin: " + skin().status());
+                }
+                if (m_restyle || m_skin_dirty)
+                {
+                    if (m_restyle)
+                    {
+                        m_dpi = std::max(1.0f, ImGui_ImplWin32_GetDpiScaleForHwnd(m_hwnd)) * m_options.extra_scale;
+                    }
                     apply_style();
                     m_restyle = false;
+                    m_skin_dirty = false;
                 }
                 ImGui_ImplWin32_NewFrame();
                 ImGui::NewFrame();
@@ -477,7 +504,8 @@ namespace uuepbs::ui
                 }
                 ImGui_ImplDX11_NewFrame();
                 build_ui();
-                const float clear[4] = {0.085f, 0.085f, 0.105f, 1.0f};
+                const ImVec4 bg = skin().color(Role::Window);
+                const float clear[4] = {bg.x, bg.y, bg.z, 1.0f};
                 m_gpu.context->OMSetRenderTargets(1, &m_gpu.target, nullptr);
                 m_gpu.context->ClearRenderTargetView(m_gpu.target, clear);
                 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
@@ -518,7 +546,7 @@ namespace uuepbs::ui
                     return;
                 }
                 build_ui();
-                if (m_soft.render(ImGui::GetDrawData(), 0x16161B, force))
+                if (m_soft.render(ImGui::GetDrawData(), skin().clear_rgb(), force))
                 {
                     HDC dc = GetDC(m_hwnd);
                     blit(dc);
@@ -620,7 +648,7 @@ namespace uuepbs::ui
                 {
                     return;
                 }
-                const uint64_t rev = Registry::instance().edit_revision();
+                const auto rev = saved_key();
                 if (rev == m_saved_revision)
                 {
                     m_dirty_since = {};
@@ -635,12 +663,20 @@ namespace uuepbs::ui
                 {
                     return;
                 }
-                uint64_t book_rev = 0;
+                uint64_t book_rev = 0, morph_rev = 0;
                 const EditBook book = Registry::instance().edits(&book_rev);
+                const MorphBook morphs = Registry::instance().morphs(&morph_rev);
                 std::string ignored;
-                m_shelf->save(PresetShelf::kSessionName, book, ignored);
-                m_saved_revision = book_rev;
+                m_shelf->save(PresetShelf::kSessionName, book, ignored, &morphs);
+                m_saved_revision = {book_rev, morph_rev};
                 m_dirty_since = {};
+            }
+
+            // Bone and morph revisions: the session file is rewritten when either changes.
+            static std::pair<uint64_t, uint64_t> saved_key()
+            {
+                const Registry& reg = Registry::instance();
+                return {reg.edit_revision(), reg.morph_revision()};
             }
 
             // ------------------------------------------------------------------ members
@@ -667,7 +703,8 @@ namespace uuepbs::ui
             std::atomic<bool> m_shown{false};
             std::atomic<int> m_request{-1};
 
-            uint64_t m_saved_revision{};
+            std::pair<uint64_t, uint64_t> m_saved_revision{};
+            bool m_skin_dirty{};
             std::optional<Clock::time_point> m_dirty_since{};
 
             PanelView m_view{};
@@ -704,5 +741,26 @@ namespace uuepbs::ui
     void post_message(const std::string& text)
     {
         g_panel.set_message(text);
+    }
+
+    std::vector<std::string> list_skins()
+    {
+        std::filesystem::path folder;
+        {
+            std::lock_guard guard(s_skins_lock);
+            folder = s_skins_folder;
+        }
+        return Skin::list(folder);
+    }
+
+    std::string current_skin()
+    {
+        return Skin::active_name();
+    }
+
+    void request_skin(const std::string& name)
+    {
+        Skin::request(name, true);
+        g_panel.wake();
     }
 } // namespace uuepbs::ui

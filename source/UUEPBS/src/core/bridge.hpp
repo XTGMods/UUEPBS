@@ -14,6 +14,8 @@
 //     bones <tab> <name> <tab> <name> ...
 //     parents <tab> <index> <tab> <index> ...
 //     ref <tab> <10 numbers per bone, space separated>   (optional: qx qy qz qw tx ty tz sx sy sz)
+//     morphs <tab> <name> <tab> <name> ...             (optional: the rig's morph targets)
+//     manim <tab> <name> <tab> <name> ...              (optional: morphs something else keeps setting)
 //     cmd <tab> <id> <tab> <verb> <tab> <argument>
 //     #end <seq>
 //
@@ -27,6 +29,8 @@
 //     hook <tab> <waiting|live|failed> <tab> <text>
 //     ui <tab> <1 while the slider window is open, else 0>
 //     reply <tab> <command id> <tab> <text, newlines as \n>
+//     morph <tab> <revision>                            (then one mw line per morph to override)
+//     mw <tab> <name> <tab> <weight>
 //     #end
 //
 // Lua writes its file in place (os.rename cannot replace a file on Windows), so the
@@ -53,6 +57,7 @@ namespace uuepbs::bridge
         std::vector<std::string> names;
         std::vector<int32_t> parents;
         std::vector<Xform> reference; // empty when Lua could not read the reference pose
+        std::vector<std::string> morphs; // morph target names of this mesh (may be empty)
     };
 
     struct Choice
@@ -77,6 +82,7 @@ namespace uuepbs::bridge
         std::vector<Choice> candidates;
         std::vector<RigInfo> rigs;
         std::vector<Command> commands;
+        std::vector<std::string> animated_morphs; // "manim": morphs the game keeps overwriting
 
         std::string setting(const std::string& key, const std::string& fallback = {}) const
         {
@@ -107,6 +113,8 @@ namespace uuepbs::bridge
         std::string hook_text;
         bool window_open{};
         std::vector<Reply> replies;
+        uint64_t morph_revision{};
+        std::vector<std::pair<std::string, double>> morphs; // weights Lua should apply (absent = game's own value)
     };
 
     std::string format_dll_state(const DllState& state);

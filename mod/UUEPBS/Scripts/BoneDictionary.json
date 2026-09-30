@@ -2,7 +2,7 @@
   "format": "UUEPBS bone dictionary",
   "version": 1,
   "help": [
-    "Decides which bones each slider in the Body tab drives. Edit freely: the window picks up changes within a few seconds.",
+    "Decides which bones each slider in the Simplified Panel drives. Edit freely: the window picks up changes within a few seconds.",
     "Bone names are cleaned before matching: IgnorePrefixes come off the front, the left/right marker is removed,",
     "IgnoreSuffixes come off the end, then everything becomes lower case letters and digits only.",
     "  MOT_Thigh_L -> thigh    CC_Base_L_Upperarm -> upperarm    Chest_M -> chest    mixamorig:LeftUpLeg -> upleg",

@@ -1,6 +1,7 @@
 // Body tab group resolution for many rig conventions, using the shipped BoneDictionary.json.
 //   test_groups <BoneDictionary.json> [bridge_in files with real skeletons...]
 #include "core/body_groups.hpp"
+#include "core/morphs.hpp"
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -121,6 +122,21 @@ int main(int argc, char** argv)
         std::vector<std::string> mix = {"mixamorig:Hips","mixamorig:Spine","mixamorig:Spine1","mixamorig:Spine2","mixamorig:LeftShoulder","mixamorig:LeftArm","mixamorig:LeftForeArm","mixamorig:LeftHand","mixamorig:LeftUpLeg","mixamorig:LeftLeg","mixamorig:LeftFoot"};
         m = show("Mixamo", mix, flat(mix.size()), d);
         CHECK(has(m, "Thighs", "mixamorig:LeftUpLeg") && has(m, "Upper arms", "mixamorig:LeftArm") && has(m, "Waist", "mixamorig:Spine"));
+    }
+    // Morph groups / exclusions from a game profile
+    {
+        MorphProfile mp;
+        std::string mmsg;
+        CHECK(parse_morph_profile(R"({ "Project": "x", "MorphGroups": { "Breasts": ["BreastSize*", "Bust"], "Belly": { "Morphs": "Belly", "Section": "Shape", "Hint": "tummy" }, "Nothing": ["NoSuch*"] },
+                                     "ExcludeMorphs": ["*_corrective*", "Viseme_##"] })", mp, mmsg));
+        CHECK(mp.groups.size() == 3 && mp.exclude.size() == 2 && mp.groups[1].section == "Shape" && mp.groups[1].hint == "tummy");
+        const std::vector<std::string> morphs = {"BreastSize", "BreastSize_Lift", "bust", "Belly", "Elbow_Corrective_01", "Viseme_12", "Smile"};
+        CHECK(mp.excluded("elbow_corrective_01") && mp.excluded("Viseme_12") && !mp.excluded("Smile"));
+        const auto groups = resolve_morph_groups(morphs, mp);
+        CHECK(groups.size() == 2 && groups[0].morphs.size() == 3 && groups[1].morphs == std::vector<std::string>{"Belly"}); // empty group dropped
+        CHECK(parse_morph_profile(R"({ "Project": "x" })", mp, mmsg) && mp.groups.empty() && mp.exclude.empty());
+        CHECK(!parse_morph_profile(R"({ "MorphGroups": ["x"] })", mp, mmsg));
+        CHECK(!parse_morph_profile(R"({ "ExcludeMorphs": 5 })", mp, mmsg));
     }
     std::printf(fails ? "GROUP TESTS FAILED (%d)\n" : "group tests passed\n", fails);
     return fails;

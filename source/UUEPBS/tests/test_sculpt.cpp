@@ -433,6 +433,51 @@ int main()
 
         EditBook legacy;
         CHECK(PresetShelf::parse("[rbs-preset 1]\npelvis = 1.1\nboob_l = 1.2 1.2 1.2 keep\n", legacy, msg));
+
+        // morph targets in presets (version 3): round trip, morph-only presets, old presets clear morphs
+        {
+            EditBook mb = book_of({{"pelvis", 1.1, 1.1, 1.1, Spread::Keep}});
+            MorphBook morphs;
+            morphs["breastsize"] = MorphEntry{"BreastSize", 0.8};
+            morphs["belly"] = MorphEntry{"Belly", 0.0}; // 0 still overrides the game
+            morphs["wild"] = MorphEntry{"Wild", 9.0};   // clamped to kMorphMax
+            morphs["wild"].weight = clamp_morph(morphs["wild"].weight);
+            const std::string mt = PresetShelf::serialize(mb, &morphs);
+            CHECK(mt.find("\"version\": 3") != std::string::npos && mt.find("\"BreastSize\": 0.8") != std::string::npos && mt.find("\"Belly\": 0") != std::string::npos);
+            EditBook back_bones;
+            MorphBook back_morphs;
+            CHECK(PresetShelf::parse(mt, back_bones, msg, &back_morphs));
+            CHECK(back_bones.size() == 1 && back_morphs.size() == 3 && back_morphs["breastsize"].name == "BreastSize" &&
+                  std::fabs(back_morphs["breastsize"].weight - 0.8) < 1e-9 && back_morphs.count("belly") && back_morphs["wild"].weight == kMorphMax);
+            CHECK(msg.find("3 morph(s)") != std::string::npos);
+            CHECK(PresetShelf::serialize(mb).find("\"version\": 2") != std::string::npos); // no morphs: same file as before
+            back_morphs["x"] = MorphEntry{"X", 1.0};
+            CHECK(PresetShelf::parse(PresetShelf::serialize(mb), back_bones, msg, &back_morphs) && back_morphs.empty());
+            CHECK(PresetShelf::parse("{ \"morphs\": { \"Smile\": 1, \"Bad\": \"x\" } }", back_bones, msg, &back_morphs));
+            CHECK(back_bones.empty() && back_morphs.size() == 1 && msg.find("1 unreadable") != std::string::npos);
+            CHECK(!PresetShelf::parse("{ \"version\": 3 }", back_bones, msg, &back_morphs)); // neither bones nor morphs
+            CHECK(PresetShelf::parse(mt, back_bones, msg)); // callers that ignore morphs still load the bones
+        }
+        // registry morph book: revisions move on edit and when the sliders are switched on/off
+        {
+            Registry& r = Registry::instance();
+            const uint64_t r0 = r.morph_revision();
+            r.set_morph("BreastSize", 0.5);
+            r.set_morph("breastsize", 0.7); // same morph, other spelling
+            CHECK(r.morphs().size() == 1 && std::fabs(r.morphs().at("breastsize").weight - 0.7) < 1e-12 && r.morph_revision() > r0);
+            const uint64_t r1 = r.morph_revision();
+            r.set_enabled(false);
+            CHECK(r.morph_revision() > r1);
+            r.set_enabled(true);
+            r.clear_morph("BREASTSIZE");
+            CHECK(r.morphs().empty());
+            r.set_morph_names({"A", "B"});
+            const uint64_t n0 = r.morph_names_revision();
+            r.set_morph_names({"A", "B"});
+            CHECK(r.morph_names_revision() == n0); // unchanged list: no churn in the window
+            r.set_morph_names({});
+            r.clear_morphs();
+        }
         CHECK(legacy.size() == 2 && legacy["boob_l"].edit.spread == Spread::Keep);
 
         PresetShelf shelf;

@@ -109,6 +109,8 @@ namespace uuepbs::ui
     {
         m_width = std::max(1, width);
         m_height = std::max(1, height);
+        m_quads.clear();
+        m_quad_bytes = 0;
         m_pixels.assign(static_cast<size_t>(m_width) * m_height, 0);
         m_last_frame = 0; // next frame must be drawn
     }
@@ -185,6 +187,16 @@ namespace uuepbs::ui
             return;
         }
         const uint32_t opaque = (static_cast<uint32_t>(k.r) << 16) | (static_cast<uint32_t>(k.g) << 8) | static_cast<uint32_t>(k.b);
+        const bool whole = fx == 0 && fy == 0 && lx == m_width - 1 && ly == m_height - 1;
+        if (whole && k.a == 255)
+        {
+            m_uniform = true; // e.g. the main window's background: still one flat colour
+            m_uniform_rgb = opaque;
+        }
+        else if (!(m_uniform && k.a == 255 && opaque == m_uniform_rgb))
+        {
+            m_uniform = false;
+        }
         for (int y = fy; y <= ly; ++y)
         {
             uint32_t* row = &m_pixels[static_cast<size_t>(y) * m_width];
@@ -216,6 +228,9 @@ namespace uuepbs::ui
         }
         const float du = (u1 - u0) / (x1 - x0);
         const float dv = (v1 - v0) / (y1 - y0);
+        const bool was_uniform = m_uniform;
+        const uint32_t uniform_rgb = m_uniform_rgb;
+        m_uniform = false; // whatever path draws this quad
 
         // Text: glyph quads step a whole number of texels per pixel (1, or 2 across with ImGui's
         // default horizontal oversampling), so the bilinear weights are the same for every pixel
@@ -261,6 +276,93 @@ namespace uuepbs::ui
             return;
         }
 
+        if (tex->BytesPerPixel == 4)
+        {
+            // Scaled image (skin backgrounds, nine-slice pieces): the bilinear taps and weights of
+            // each column are the same on every row, so they are worked out once per quad.
+            // Same result as sample(), without the per-pixel float maths.
+            const int cols = lx - fx + 1;
+            const int rows = ly - fy + 1;
+            constexpr int kCacheMinPixels = 4096;
+            constexpr size_t kCacheMaxBytes = 48u << 20;
+            QuadEntry* fill = nullptr;
+            if (cols * rows >= kCacheMinPixels)
+            {
+                const QuadKey key{tex, x0, y0, x1, y1, u0, v0, u1, v1, col, fx, lx, fy, ly, was_uniform ? (0x1000000u | uniform_rgb) : 0u};
+                if (const QuadEntry* hit = find_quad(key))
+                {
+                    blit_quad(*hit);
+                    ++m_stats.cached_quads;
+                    return;
+                }
+                const size_t bytes = static_cast<size_t>(cols) * rows * 4;
+                if (m_quad_bytes + bytes <= kCacheMaxBytes)
+                {
+                    // Over one flat colour the finished pixels are stored (later frames just copy them).
+                    m_quads.push_back({key, std::vector<uint32_t>(static_cast<size_t>(cols) * rows), key.under != 0, m_frame_no});
+                    m_quad_bytes += bytes;
+                    fill = &m_quads.back();
+                }
+            }
+            m_cols.resize(static_cast<size_t>(cols));
+            const int W = tex->Width, H = tex->Height;
+            for (int i = 0; i < cols; ++i)
+            {
+                const float u = u0 + (static_cast<float>(fx + i) + 0.5f - x0) * du;
+                const float sx = u * tw - 0.5f;
+                const int t0 = static_cast<int>(std::floor(sx));
+                m_cols[static_cast<size_t>(i)] = {std::clamp(t0, 0, W - 1) * 4, std::clamp(t0 + 1, 0, W - 1) * 4,
+                                                  static_cast<int>((sx - static_cast<float>(t0)) * 256.0f)};
+            }
+            const unsigned char* px = tex->Pixels;
+            const bool white = k.r == 255 && k.g == 255 && k.b == 255 && k.a == 255;
+            for (int y = fy; y <= ly; ++y)
+            {
+                const float v = v0 + (static_cast<float>(y) + 0.5f - y0) * dv;
+                const float sy = v * th - 0.5f;
+                const int t0 = static_cast<int>(std::floor(sy));
+                const int wy = static_cast<int>((sy - static_cast<float>(t0)) * 256.0f);
+                const unsigned char* rowa = px + static_cast<size_t>(std::clamp(t0, 0, H - 1)) * W * 4;
+                const unsigned char* rowb = px + static_cast<size_t>(std::clamp(t0 + 1, 0, H - 1)) * W * 4;
+                uint32_t* row = &m_pixels[static_cast<size_t>(y) * m_width];
+                uint32_t* keep = fill ? &fill->argb[static_cast<size_t>(y - fy) * cols] : nullptr;
+                for (int i = 0; i < cols; ++i)
+                {
+                    const Column& c = m_cols[static_cast<size_t>(i)];
+                    const int w00 = (256 - c.w) * (256 - wy), w10 = c.w * (256 - wy), w01 = (256 - c.w) * wy, w11 = c.w * wy;
+                    const unsigned char* p00 = rowa + c.a;
+                    const unsigned char* p10 = rowa + c.b;
+                    const unsigned char* p01 = rowb + c.a;
+                    const unsigned char* p11 = rowb + c.b;
+                    int a = (p00[3] * w00 + p10[3] * w10 + p01[3] * w01 + p11[3] * w11) >> 16;
+                    if (a == 0)
+                    {
+                        if (keep)
+                        {
+                            keep[i] = fill->key.under ? (0xFF000000u | (row[fx + i] & 0xFFFFFFu)) : 0u;
+                        }
+                        continue;
+                    }
+                    int r = (p00[0] * w00 + p10[0] * w10 + p01[0] * w01 + p11[0] * w11) >> 16;
+                    int g = (p00[1] * w00 + p10[1] * w10 + p01[1] * w01 + p11[1] * w11) >> 16;
+                    int b = (p00[2] * w00 + p10[2] * w10 + p01[2] * w01 + p11[2] * w11) >> 16;
+                    if (!white)
+                    {
+                        r = mul255(k.r, r), g = mul255(k.g, g), b = mul255(k.b, b), a = mul255(k.a, a);
+                    }
+                    blend(row[fx + i], r, g, b, a);
+                    if (keep)
+                    {
+                        keep[i] = fill->key.under ? (0xFF000000u | (row[fx + i] & 0xFFFFFFu))
+                                                  : (static_cast<uint32_t>(a) << 24) | (static_cast<uint32_t>(mul255(r, a)) << 16) |
+                                                        (static_cast<uint32_t>(mul255(g, a)) << 8) | static_cast<uint32_t>(mul255(b, a));
+                    }
+                }
+            }
+            ++m_stats.fast_rects;
+            return;
+        }
+
         for (int y = fy; y <= ly; ++y)
         {
             uint32_t* row = &m_pixels[static_cast<size_t>(y) * m_width];
@@ -273,6 +375,58 @@ namespace uuepbs::ui
             }
         }
         ++m_stats.fast_rects;
+    }
+
+    const SoftRenderer::QuadEntry* SoftRenderer::find_quad(const QuadKey& key)
+    {
+        for (QuadEntry& e : m_quads)
+        {
+            if (e.key == key)
+            {
+                e.last_used = m_frame_no;
+                return &e;
+            }
+        }
+        return nullptr;
+    }
+
+    void SoftRenderer::blit_quad(const QuadEntry& e)
+    {
+        const int cols = e.key.lx - e.key.fx + 1;
+        for (int y = e.key.fy; y <= e.key.ly; ++y)
+        {
+            const uint32_t* src = &e.argb[static_cast<size_t>(y - e.key.fy) * cols];
+            uint32_t* row = &m_pixels[static_cast<size_t>(y) * m_width + e.key.fx];
+            if (e.opaque)
+            {
+                for (int i = 0; i < cols; ++i)
+                {
+                    row[i] = src[i] & 0xFFFFFFu;
+                }
+                continue;
+            }
+            for (int i = 0; i < cols; ++i)
+            {
+                const uint32_t s = src[i];
+                const int a = static_cast<int>(s >> 24);
+                if (a == 0)
+                {
+                    continue;
+                }
+                if (a == 255)
+                {
+                    row[i] = s & 0xFFFFFFu;
+                    continue;
+                }
+                // Premultiplied source: same result as blend(), half the multiplies.
+                const uint32_t d = row[i];
+                const int ia = 255 - a;
+                const int nr = static_cast<int>((s >> 16) & 0xFF) + mul255(static_cast<int>((d >> 16) & 0xFF), ia);
+                const int ng = static_cast<int>((s >> 8) & 0xFF) + mul255(static_cast<int>((d >> 8) & 0xFF), ia);
+                const int nb = static_cast<int>(s & 0xFF) + mul255(static_cast<int>(d & 0xFF), ia);
+                row[i] = (static_cast<uint32_t>(std::min(nr, 255)) << 16) | (static_cast<uint32_t>(std::min(ng, 255)) << 8) | static_cast<uint32_t>(std::min(nb, 255));
+            }
+        }
     }
 
     void SoftRenderer::triangle(const Clip& c, const ImTextureData* tex, const ImDrawVert& va, const ImDrawVert& vb_in, const ImDrawVert& vc_in)
@@ -292,6 +446,7 @@ namespace uuepbs::ui
             std::swap(vb, vc);
             area = -area;
         }
+        m_uniform = false;
         const ImVec2 a = va.pos, b = vb->pos, d = vc->pos;
         const int fx = std::max(c.x0, static_cast<int>(std::floor(std::min({a.x, b.x, d.x}))));
         const int lx = std::min(c.x1 - 1, static_cast<int>(std::ceil(std::max({a.x, b.x, d.x}))));
@@ -393,6 +548,11 @@ namespace uuepbs::ui
     bool SoftRenderer::render(ImDrawData* dd, uint32_t clear_rgb, bool force)
     {
         const bool textures_changed = dd && update_textures(dd);
+        if (textures_changed)
+        {
+            m_quads.clear(); // a texture came or went: cached samples may point at old pixels
+            m_quad_bytes = 0;
+        }
         const uint64_t frame = dd ? fingerprint(dd, clear_rgb) : 0;
         if (!force && !textures_changed && frame == m_last_frame && frame != 0)
         {
@@ -400,7 +560,10 @@ namespace uuepbs::ui
         }
         m_last_frame = frame;
         m_stats = {};
+        ++m_frame_no;
         std::fill(m_pixels.begin(), m_pixels.end(), clear_rgb & 0xFFFFFF);
+        m_uniform = true;
+        m_uniform_rgb = clear_rgb & 0xFFFFFF;
         if (!dd)
         {
             return true;
@@ -473,6 +636,17 @@ namespace uuepbs::ui
                     triangle(clip, tex, p0, p1, p2);
                     e += 3;
                 }
+            }
+        }
+        // Forget quads that were not drawn this frame (scrolled, resized, skin changed).
+        const size_t before = m_quads.size();
+        std::erase_if(m_quads, [this](const QuadEntry& q) { return q.last_used != m_frame_no; });
+        if (m_quads.size() != before)
+        {
+            m_quad_bytes = 0;
+            for (const QuadEntry& q : m_quads)
+            {
+                m_quad_bytes += q.argb.size() * 4;
             }
         }
         return true;

@@ -35,6 +35,13 @@ int main(int argc, char** argv)
     DllState d; d.session = "a"; d.lua_session = "b"; d.replies.push_back({7, "line1\nline\t2"});
     const std::string out = format_dll_state(d);
     CHECK(out.find("reply\t7\tline1\\nline 2\n") != std::string::npos && out.ends_with("#end\n") && out.find("for\tb\n") != std::string::npos);
+    // morph target names per rig and the "animated" list from Lua; weights back from the DLL
+    auto mo = parse_lua_state("UBS1 s 4\nrig\t1000\tBody\t1\tBob\nbones\troot\nparents\t-1\nmorphs\tBreastSize\tBelly\t\nrig\t2000\tShirt\t0\tBob\nbones\troot\nparents\t-1\nmanim\tBelly\n#end 4\n");
+    CHECK(mo && mo->rigs.size() == 2 && mo->rigs[0].morphs.size() == 2 && mo->rigs[0].morphs[1] == "Belly" && mo->rigs[1].morphs.empty());
+    CHECK(mo && mo->animated_morphs.size() == 1 && mo->animated_morphs[0] == "Belly");
+    DllState dm; dm.morph_revision = 12; dm.morphs = {{"BreastSize", 0.8}, {"Belly\tx", -0.25}};
+    const std::string mout = format_dll_state(dm);
+    CHECK(mout.find("morph\t12\nmw\tBreastSize\t0.8000\nmw\tBelly x\t-0.2500\n#end\n") != std::string::npos);
     std::printf(fails ? "BRIDGE TESTS FAILED\n" : "bridge tests passed\n");
     return fails;
 }

@@ -6,7 +6,9 @@
 // the game or this window has focus) toggles it.
 #pragma once
 
+#include <filesystem>
 #include <string>
+#include <vector>
 
 namespace uuepbs
 {
@@ -27,6 +29,8 @@ namespace uuepbs::ui
         int fps{30};             // frame cap while the window is being used (it idles at ~4 fps)
         std::string version;
         TargetSource* targets{};
+        std::filesystem::path skins_folder; // "<Win64>\\UUEPBS Skins": one sub-folder per skin
+        std::string skin;                    // config.lua Skin: used until a skin is picked in the window
     };
 
     bool start(const PresetShelf* shelf, const Options& options);
@@ -38,4 +42,9 @@ namespace uuepbs::ui
 
     // Latest human-readable result (e.g. from a console preset command) shown in the footer.
     void post_message(const std::string& text);
+
+    // Window skins (any thread). The skin itself is loaded on the window thread.
+    std::vector<std::string> list_skins();
+    std::string current_skin();
+    void request_skin(const std::string& name);
 } // namespace uuepbs::ui

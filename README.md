@@ -7,9 +7,11 @@ Universal Unreal Engine Player Body Sliders (UUEPBS) is a near universal player 
 
 https://github.com/user-attachments/assets/4e4372bc-8a64-4255-b8ae-a33645ce187e
 ### V2.6.1 - Changelogs
-* Added support for simultaneous NPC
+* Added full support for player and NPC that works simultaneously
 * Improved performance
 * Changed scanning method to drop full world rescan for actors
+* Renamed Body and Bones Tab to Simplified and Detailed Panel
+* Added UI Customisability
 
 ## Tested and confirmed working games so far
 * GON God of Nothing

@@ -8,9 +8,11 @@
 //   bridge_in.txt   written by Lua, read by the DLL
 //     UBS1 <session> <seq>
 //     setup <tab> key=value <tab> key=value ...
-//     target <tab> <id> <tab> <label>
-//     cand <tab> <id> <tab> <label>                 (one per pickable character)
-//     rig <tab> <address hex> <tab> <label> <tab> <primary 0/1> <tab> <owner>
+//     target <tab> <id> <tab> <label> <tab> <actor key> <tab> <identity>
+//     cand <tab> <id> <tab> <label> <tab> <actor key>  (one per pickable character)
+//     rig <tab> <address hex> <tab> <label> <tab> <primary 0/1> <tab> <owner> <tab> <actor key>
+//     gone <tab> <actor key>                            (a kept character no longer exists)
+//     npc <tab> <actor key> <tab> <identity> <tab> <label>  (a remembered character is loaded)
 //     bones <tab> <name> <tab> <name> ...
 //     parents <tab> <index> <tab> <index> ...
 //     ref <tab> <10 numbers per bone, space separated>   (optional: qx qy qz qw tx ty tz sx sy sz)
@@ -29,8 +31,13 @@
 //     hook <tab> <waiting|live|failed> <tab> <text>
 //     ui <tab> <1 while the slider window is open, else 0>
 //     reply <tab> <command id> <tab> <text, newlines as \n>
+//     keep <tab> <actor key> <tab> <label>              (characters with edits: Lua keeps their meshes)
+//     remember <tab> <identity>                         (NPCs with saved sliders: Lua looks out for them)
 //     morph <tab> <revision>                            (then one mw line per morph to override)
-//     mw <tab> <name> <tab> <weight>
+//     mw <tab> <name> <tab> <weight> <tab> <actor key>
+//
+// Actor keys: "player" for the default character (the controlled pawn or the profile's Target),
+// otherwise the actor's address in hex. "primary" is the main mesh of that character.
 //     #end
 //
 // Lua writes its file in place (os.rename cannot replace a file on Windows), so the
@@ -53,6 +60,7 @@ namespace uuepbs::bridge
         uintptr_t address{};
         std::string label;
         std::string owner;
+        std::string actor{"player"}; // key of the character this mesh belongs to
         bool primary{};
         std::vector<std::string> names;
         std::vector<int32_t> parents;
@@ -63,6 +71,15 @@ namespace uuepbs::bridge
     struct Choice
     {
         std::string id;
+        std::string label;
+        std::string key{"player"}; // actor key
+        std::string identity;      // NPC identity across reloads (target line only)
+    };
+
+    struct NpcSighting
+    {
+        std::string key;
+        std::string identity;
         std::string label;
     };
 
@@ -83,6 +100,8 @@ namespace uuepbs::bridge
         std::vector<RigInfo> rigs;
         std::vector<Command> commands;
         std::vector<std::string> animated_morphs; // "manim": morphs the game keeps overwriting
+        std::vector<std::string> gone;            // kept characters that no longer exist
+        std::vector<NpcSighting> npcs;            // remembered characters Lua found
 
         std::string setting(const std::string& key, const std::string& fallback = {}) const
         {
@@ -114,7 +133,15 @@ namespace uuepbs::bridge
         bool window_open{};
         std::vector<Reply> replies;
         uint64_t morph_revision{};
-        std::vector<std::pair<std::string, double>> morphs; // weights Lua should apply (absent = game's own value)
+        struct Morph
+        {
+            std::string name;
+            double weight{};
+            std::string actor{"player"};
+        };
+        std::vector<Morph> morphs; // weights Lua should apply (absent = game's own value)
+        std::vector<std::pair<std::string, std::string>> keeps; // characters with edits: key, label
+        std::vector<std::string> remembered;                    // identities with saved sliders
     };
 
     std::string format_dll_state(const DllState& state);

@@ -136,6 +136,8 @@ namespace uuepbs::ui
         if (now - m_rigs_time > std::chrono::milliseconds(500))
         {
             m_rigs = reg.rigs();
+            m_edited = reg.edited_actors();
+            m_remembered = reg.remembered();
             m_rigs_time = now;
             m_mirror_text = reg.mirror_source();
             m_animated = reg.animated_morphs();
@@ -492,7 +494,8 @@ namespace uuepbs::ui
         const std::string shown = m_target.label.empty() ? std::string("(searching...)") : m_target.label;
         if (ImGui::BeginCombo("##target", shown.c_str(), ImGuiComboFlags_HeightLarge))
         {
-            if (ImGui::Selectable("Automatic (player / game default)", m_target.id == "auto"))
+            const std::string auto_label = std::string("Automatic (player / game default)") + (is_edited(kPlayerActor) ? "   - edited" : "");
+            if (ImGui::Selectable(auto_label.c_str(), m_target.id == "auto"))
             {
                 m_targets->pick_target("auto");
                 set_message("Switching to the default character");
@@ -504,10 +507,20 @@ namespace uuepbs::ui
             for (const TargetChoice& t : m_target_list)
             {
                 ImGui::PushID(t.id.c_str());
-                if (ImGui::Selectable(t.label.c_str(), t.id == m_target.id))
+                const bool edited = is_edited(t.key);
+                if (edited)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, accent());
+                }
+                const std::string label = t.label + (edited ? "   - edited" : "");
+                if (ImGui::Selectable(label.c_str(), t.id == m_target.id))
                 {
                     m_targets->pick_target(t.id);
                     set_message("Switching to " + t.label);
+                }
+                if (edited)
+                {
+                    ImGui::PopStyleColor();
                 }
                 ImGui::PopID();
             }
@@ -517,7 +530,9 @@ namespace uuepbs::ui
         {
             m_targets->refresh_targets();
         }
-        tooltip("Whose body the sliders edit. The list shows characters currently loaded in the level.");
+        tooltip("Whose body the sliders edit. The list shows characters currently loaded in the level.\n"
+                "Characters you have edited keep their sliders while you edit someone else (marked \"edited\").\n"
+                "Characters you never edited are left alone.");
         ImGui::SameLine();
         if (sk.button("Refresh", "refresh"))
         {
@@ -531,6 +546,133 @@ namespace uuepbs::ui
                                     (key.empty() ? std::string() : "\nHotkey: " + key + " (works in game too).");
             tooltip(tip.c_str());
         }
+
+        // Other characters that keep their sliders while this one is edited.
+        std::string others;
+        size_t n_others = 0;
+        for (const ActorSummary& a : m_edited)
+        {
+            if (!a.active)
+            {
+                others += (others.empty() ? "" : ", ") + a.label;
+                ++n_others;
+            }
+        }
+        if (n_others > 0)
+        {
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(muted(), "Also keeping sliders on: %s", others.c_str());
+            ImGui::PopTextWrapPos();
+            tooltip("These characters keep their own sliders while you edit this one.\n"
+                    "Pick one above to change it, or release it in the Status tab (Edited characters).");
+        }
+    }
+
+    bool PanelView::is_edited(const std::string& key) const
+    {
+        return std::any_of(m_edited.begin(), m_edited.end(), [&](const ActorSummary& a) { return a.key == key; });
+    }
+
+    // Status tab: every character with sliders, with Select / Release.
+    void PanelView::draw_edited_characters()
+    {
+        Skin& sk = skin();
+        ImGui::SeparatorText("Edited characters");
+        if (!m_remembered.empty())
+        {
+            std::string list;
+            for (const std::string& id : m_remembered)
+            {
+                list += (list.empty() ? "" : ", ") + id;
+            }
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(muted(), "Remembered NPCs (%zu): %s", m_remembered.size(), list.c_str());
+            ImGui::PopTextWrapPos();
+            tooltip("Their sliders come back automatically when they are loaded within CharacterRange of the player.\n"
+                    "Files: _characters folder inside the presets folder.");
+        }
+        if (m_edited.empty())
+        {
+            ImGui::TextColored(muted(), "None yet. A character gets its own sliders once you pick it and move one.");
+            return;
+        }
+        std::string release_key;
+        if (ImGui::BeginTable("##edited", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("Character", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+            ImGui::TableSetupColumn("Bones", ImGuiTableColumnFlags_WidthStretch, 0.8f);
+            ImGui::TableSetupColumn("Morphs", ImGuiTableColumnFlags_WidthStretch, 0.8f);
+            ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed,
+                                    sk.button_width("Select") + sk.button_width("Release", "reset") + ImGui::GetStyle().ItemSpacing.x);
+            ImGui::TableHeadersRow();
+            for (const ActorSummary& a : m_edited)
+            {
+                ImGui::PushID(a.key.c_str());
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                if (a.active)
+                {
+                    ImGui::TextColored(accent(), "%s (selected)", a.label.c_str());
+                }
+                else
+                {
+                    ImGui::TextUnformatted(a.label.c_str());
+                }
+                if (a.key == kPlayerActor)
+                {
+                    tooltip("The player's sliders are saved with the session (_last_session).");
+                }
+                else if (!a.identity.empty())
+                {
+                    ImGui::SameLine();
+                    ImGui::TextColored(muted(), "- remembered");
+                    const std::string tip = "Remembered as \"" + a.identity + "\": these sliders come back by themselves whenever this character\n"
+                                            "is loaded near the player (after a reload, in a new area...). Release forgets it.";
+                    tooltip(tip.c_str());
+                }
+                else
+                {
+                    ImGui::SameLine();
+                    ImGui::TextColored(warn(), "- this visit only");
+                    tooltip("This character has no stable name to recognise it by after a reload, so its sliders last until it despawns.\n"
+                            "Save a preset to reuse them.");
+                }
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("%zu", a.bones);
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("%zu", a.morphs);
+                ImGui::TableNextColumn();
+                ImGui::BeginDisabled(a.active || !m_targets);
+                if (sk.button("Select"))
+                {
+                    m_targets->pick_target(a.pick_id);
+                    set_message("Switching to " + a.label);
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (sk.button("Release", "reset"))
+                {
+                    release_key = a.key;
+                }
+                tooltip("Drop this character's sliders. Its body goes back to normal, and it is left alone from now on\n"
+                        "(unless you pick it and edit it again).");
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (!release_key.empty())
+        {
+            Registry::instance().forget_actor(release_key);
+            m_edited = Registry::instance().edited_actors();
+            set_message("Sliders released");
+        }
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(muted(), "The player's sliders are saved with the session. NPCs are remembered by name and get their sliders "
+                                    "back whenever they are loaded near the player; Release or Reset all forgets them.");
+        ImGui::PopTextWrapPos();
     }
 
     void PanelView::draw_simplified()
@@ -1190,8 +1332,13 @@ namespace uuepbs::ui
         }
         if (ImGui::BeginPopupModal("Reset all sliders?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
         {
-            ImGui::TextUnformatted(m_morph_names.empty() ? "Set every bone back to 1.0x?"
-                                                         : "Set every bone back to 1.0x and give every morph back to the game?");
+            const std::string who = m_target.label.empty() ? std::string("this character") : m_target.label;
+            ImGui::Text(m_morph_names.empty() ? "Set every bone of %s back to 1.0x?" : "Set every bone of %s back to 1.0x and give every morph back to the game?",
+                        who.c_str());
+            if (m_edited.size() > (is_edited(m_target.key) ? 1u : 0u))
+            {
+                ImGui::TextColored(muted(), "Other characters keep their sliders (release them in the Status tab).");
+            }
             if (sk.button("Reset"))
             {
                 Registry::instance().clear_edits();
@@ -1320,6 +1467,7 @@ namespace uuepbs::ui
         }
         ImGui::PopTextWrapPos();
 
+        draw_edited_characters();
         draw_skin_picker();
 
         ImGui::SeparatorText("Tracked meshes");
@@ -1333,8 +1481,8 @@ namespace uuepbs::ui
             {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(r.stale ? warn() : ImGui::GetStyleColorVec4(ImGuiCol_Text), "%s%s%s", r.label.c_str(), r.primary ? " (bones listed)" : "",
-                                   r.stale ? " (stale)" : "");
+                ImGui::TextColored(r.stale ? warn() : r.active ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : muted(), "%s / %s%s%s", r.owner.c_str(),
+                                   r.label.c_str(), r.primary && r.active ? " (bones listed)" : "", r.stale ? " (stale)" : "");
                 if (!r.owner.empty() && ImGui::IsItemHovered())
                 {
                     ImGui::SetTooltip("%s", r.owner.c_str());

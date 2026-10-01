@@ -39,18 +39,39 @@ return {
 
     KeepWindowOnTop = true,
     WindowScale = 1.0, -- multiplies the Windows DPI scale
-    FontSize = 19,     -- text size in the window (pixels before DPI scaling)
+    FontSize = 22,     -- text size in the window (pixels before DPI scaling)
 
-    -- Classes listed in the window's Character picker. The list is only built while the
-    -- window is open (searching for actors is expensive).
+    -- Classes listed in the window's Character picker, nearest first. The world is searched when the
+    -- window opens and on Refresh; while it stays open, newly spawned characters are added as they appear.
     CandidateClasses = { "Character" },
     MaxCandidates = 40,
+    -- Characters you picked and edited keep their sliders while you edit someone else
+    -- (characters you never edited are left alone). This caps how many are kept at once.
+    MaxEditedCharacters = 16,
+    -- NPCs you edit are remembered by name (or class + face mesh) and get their last sliders back
+    -- by themselves whenever they are loaded near the player again (after a reload, in a new area).
+    -- Files: <presets folder>\_characters\<name>.json. Release / Reset all on an NPC forgets it.
+    RememberCharacters = true,
+    -- Characters spawned at run time (names ending in a long number, e.g. Gatekeeper_church2_2147465868)
+    -- are recognised through the placed record they point at, when the game has one (The Blood of
+    -- Dawnwalker: the "Stub" component -> Gatekeeper_church2_277). The search runs once per class.
+    -- false = recognise them by name only (all spawned "Gatekeeper_church2" guards would share one).
+    IdentityLinkSearch = true,
+    -- NPCs are only sculpted while they are this close to the player, in cm (5000 = 50 m). 0 = any distance.
+    CharacterRange = 5000,
+    -- At most this many loaded characters get the sliders of one remembered NPC at a time
+    -- (two NPCs can only share a name or face by accident).
+    MaxSameIdentity = 2,
+    -- Total skeletal meshes sculpted at once, all characters together (each character has several:
+    -- body, hands, outfit pieces...). Characters that would not fit whole are left alone, farthest first.
+    -- 8-64; the DLL never tracks more than 64.
+    MaxTrackedMeshes = 64,
 
     -- How often the script talks to the DLL (console commands, picker, rescans).
-    PollIntervalMs = 400,
-    -- How often it checks that the character and its meshes are still the same.
-    -- Only cheap validity checks run here; a full scan happens when something changed.
-    WatchIntervalMs = 3000,
+    PollIntervalMs = 600,
+    -- How often it checks that the characters and their meshes are still the same.
+    -- Only cheap validity checks run here; a character is read again only when it changed.
+    WatchIntervalMs = 5000,
     -- While the window is open, morph target sliders are applied this often (ms) so dragging
     -- feels live. 0 = only every PollIntervalMs. Nothing runs at this rate while it is closed.
     MorphPollMs = 100,

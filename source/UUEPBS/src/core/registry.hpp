@@ -1,5 +1,12 @@
 // UUEPBS - shared state between the pose hook (game thread), the Lua
 // bridge (its own thread) and the slider window (its own UI thread).
+//
+// Several characters can be edited at once. Each one ("actor") has its own bone and morph
+// edits, keyed by the actor key Lua sends: "player" for the default character (the pawn you
+// control or the profile's Target, so its sliders survive respawns), otherwise the actor's
+// address. One actor is *active* - the one picked in the window; edits(), set_bone(),
+// morphs(), ... work on it. Other actors keep their edits and their meshes stay tracked only
+// while they have some (Lua is told which through edited_actors()).
 #pragma once
 
 #include "mirror.hpp"
@@ -7,6 +14,7 @@
 #include "sculpt.hpp"
 
 #include <array>
+#include <map>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -66,12 +74,37 @@ namespace uuepbs
         uint64_t frames{};
         bool stale{};
         bool primary{};
+        std::string actor; // actor key
+        bool active{};     // belongs to the character picked in the window
     };
+
+    // A character that has bone or morph edits.
+    struct ActorSummary
+    {
+        std::string key;     // "player" or the actor's address
+        std::string label;   // display name
+        std::string pick_id; // what the picker uses to select it ("auto" for the player)
+        size_t bones{};
+        size_t morphs{};
+        bool active{};
+        std::string identity; // who the NPC is across reloads ("Anca"); empty = not remembered
+    };
+
+    // An NPC's sliders as they should be remembered (one file per identity).
+    struct CharacterBook
+    {
+        std::string identity;
+        std::string label;
+        EditBook bones;
+        MorphBook morphs;
+    };
+
+    constexpr const char* kPlayerActor = "player";
 
     class Registry
     {
       public:
-        static constexpr size_t kMaxRigs = 32;
+        static constexpr size_t kMaxRigs = 64; // all tracked meshes of all kept characters
 
         static Registry& instance();
 
@@ -79,8 +112,9 @@ namespace uuepbs
 
         // ---- bridge side ----------------------------------------------------
         // `primary` rigs feed the bone list shown in the window. `owner` is the actor's display name.
+        // `actor` is the key of the character the mesh belongs to; `primary` = that character's main mesh.
         bool track(uintptr_t component, const std::string& label, const std::string& owner, std::vector<std::string> names,
-                   std::vector<int32_t> parents, bool primary, std::string& message);
+                   std::vector<int32_t> parents, bool primary, std::string& message, const std::string& actor = kPlayerActor);
         // Parent-relative reference pose of a tracked rig (for measuring left/right mirroring).
         void set_reference_pose(uintptr_t component, std::vector<Xform> local_pose);
         std::vector<uintptr_t> tracked_components() const;
@@ -94,8 +128,35 @@ namespace uuepbs
         PoseLayout layout() const;
         void on_pose_finalized(void* component);
 
-        // ---- UI / preset side -----------------------------------------------
+        // ---- characters --------------------------------------------------------
+        // The character the window edits. Rebuilds the skeleton view when it changes.
+        void set_active_actor(const std::string& key, const std::string& label, const std::string& pick_id);
+        std::string active_actor() const;
+        // Characters with any bone or morph edits (the active one included), active first.
+        std::vector<ActorSummary> edited_actors() const;
+        // Drops a character's edits (its meshes are released once Lua hears of it).
+        // forget_memory: also forget the remembered identity (Release / reset all). A character that
+        // merely despawned keeps its memory, so its sliders come back when it appears again.
+        void forget_actor(const std::string& key, bool forget_memory = true);
+        // NPC identity across reloads (name without instance number, or class@face mesh).
+        void set_actor_identity(const std::string& key, const std::string& identity);
+        // Current sliders of every NPC that has an identity (empty books included).
+        std::vector<CharacterBook> character_books() const;
+        // Identities whose memory was dropped since the last call (their files get deleted).
+        std::vector<std::string> take_forgotten_identities();
+        // Identities with a saved file (shown in the window).
+        void set_remembered(std::vector<std::string> identities);
+        std::vector<std::string> remembered() const;
+        EditBook edits_of(const std::string& key) const;
+        void replace_edits_of(const std::string& key, EditBook book);
+        MorphBook morphs_of(const std::string& key) const;
+        void replace_morphs_of(const std::string& key, MorphBook book);
+        // Every character's morph weights (what Lua applies), keyed by actor key.
+        std::map<std::string, MorphBook> all_morphs(uint64_t* revision = nullptr) const;
+
+        // ---- UI / preset side (the active character) ---------------------------
         EditBook edits(uint64_t* revision = nullptr) const;
+        // Changes whenever any character's edits change or another character becomes active.
         uint64_t edit_revision() const { return m_edit_revision.load(std::memory_order_acquire); }
         void set_bone(const std::string& bone, const BoneEdit& scale);
         void clear_bone(const std::string& bone);
@@ -132,6 +193,15 @@ namespace uuepbs
         bool take_rescan_request() { return m_rescan.exchange(false, std::memory_order_acq_rel); }
 
       private:
+        struct Actor
+        {
+            std::string label;
+            std::string pick_id;
+            std::string identity;
+            EditBook book;
+            uint64_t revision{}; // value of m_edit_revision at its last change (unique across actors)
+        };
+
         struct Rig
         {
             uintptr_t component{};
@@ -140,9 +210,12 @@ namespace uuepbs
             uintptr_t object_class{};
             std::string label;
             std::string owner;
+            std::string actor_key;
+            Actor* actor{}; // node in m_actors (stable while the rig exists)
             bool primary{};
             bool stale{};
             uint64_t frames{};
+            std::vector<Xform> reference; // parent-relative reference pose, when Lua could read it
             RigSculptor sculptor;
             std::vector<Xform> scratch; // float poses are converted here
             std::vector<int32_t> inputs; // bones converted for the current frame
@@ -155,14 +228,20 @@ namespace uuepbs
         const Rig* find_rig(uintptr_t component) const;
         void rebuild_hot_list();
         void rebuild_skeleton_view();
-        void bump_edits();
+        void bump_edits(Actor& actor);
+        Actor& actor_locked(const std::string& key);
+        Actor& active_locked() { return actor_locked(m_active); }
+        void prune_actors_locked();
 
         mutable std::mutex m_lock;
         std::vector<std::unique_ptr<Rig>> m_rigs;
         std::array<std::atomic<uintptr_t>, kMaxRigs> m_hot{};
         std::atomic<size_t> m_hot_count{0}; // used slots of m_hot (the detour's fast reject)
 
-        EditBook m_book;
+        std::map<std::string, Actor> m_actors; // guarded by m_lock
+        std::vector<std::string> m_forgotten;  // guarded by m_lock
+        std::vector<std::string> m_remembered; // guarded by m_lock
+        std::string m_active{kPlayerActor};
         EditBook m_empty_book;
         std::atomic<uint64_t> m_edit_revision{1};
         std::atomic<bool> m_enabled{true};
@@ -174,7 +253,8 @@ namespace uuepbs
         std::atomic<bool> m_rescan{false};
 
         mutable std::mutex m_morph_lock; // separate from m_lock: the pose hook never waits on morph edits
-        MorphBook m_morphs;
+        std::map<std::string, MorphBook> m_morph_books; // by actor key
+        std::string m_morph_active{kPlayerActor};       // copy of m_active for the morph side
         std::atomic<uint64_t> m_morph_revision{1};
         std::vector<std::string> m_morph_names;
         std::atomic<uint64_t> m_morph_names_revision{1};

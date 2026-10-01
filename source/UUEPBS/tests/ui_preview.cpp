@@ -31,8 +31,11 @@ struct FakeHost : ui::PanelHost
 
 struct FakeTargets : ui::TargetSource
 {
-    std::vector<ui::TargetChoice> targets() override { return {{"1A2B3C", "BP_Rokuv3_C_0 (player)"}, {"4D5E6F", "BP_NPC_Guard_C_2"}}; }
-    ui::TargetChoice current_target() override { return {"1A2B3C", "BP_Rokuv3_C_0 (player)"}; }
+    std::vector<ui::TargetChoice> targets() override
+    {
+        return {{"1A2B3C", "BP_Rokuv3_C_0 (player)", "player"}, {"4D5E6F", "BP_NPC_Guard_C_2", "4D5E6F"}, {"778899", "BP_NPC_Vendor_C_1", "778899"}};
+    }
+    ui::TargetChoice current_target() override { return {"auto", "BP_Rokuv3_C_0 (player)", "player"}; }
     void pick_target(const std::string&) override {}
     void refresh_targets() override {}
     void request_rescan() override {}
@@ -269,6 +272,19 @@ int main(int argc, char** argv)
 
     reg.on_pose_finalized(comp);
 
+    // An NPC that was picked and edited earlier keeps its sliders (shown in Status > Edited characters).
+    alignas(16) static unsigned char comp3[0x1000] = {};
+    comp3[0] = 0x33;
+    comp3[0xC] = 9;
+    reg.set_active_actor("4D5E6F", "BP_NPC_Guard_C_2", "4D5E6F");
+    reg.track((uintptr_t)comp3, "CharacterMesh0", "BP_NPC_Guard_C_2", names, parents, true, msg, "4D5E6F");
+    set("spine_01", 1.1, 1.1, 1.1, Spread::Keep);
+    set("head", 0.9, 0.9, 0.9, Spread::Chain);
+    reg.set_morph("Muscle", 0.6);
+    reg.set_actor_identity("4D5E6F", "Anca");
+    reg.set_remembered({"Anca", "Lacra"});
+    reg.set_active_actor("player", "BP_Rokuv3_C_0 (player)", "auto");
+
     // Morph targets as Lua would report them, a profile with MorphGroups and one exclusion.
     reg.set_morph_names({"BreastSize", "Breast_L_Lift", "Breast_R_Lift", "Belly", "HipWidth", "ThighThickness", "Muscle", "WaistNarrow",
                          "Face_Smile", "Face_Blink_L", "Face_Blink_R", "Corrective_Elbow"});
@@ -315,7 +331,7 @@ int main(int argc, char** argv)
     FakeHost host;
     FakeTargets targets;
     ui::PanelView view;
-    view.configure(&shelf, &host, &targets, "v2.2.0", true);
+    view.configure(&shelf, &host, &targets, "v2.4.0", true);
     view.refresh_presets();
     view.set_message("Loaded 'Curvy' (7 bone(s), 4 morph(s))");
 

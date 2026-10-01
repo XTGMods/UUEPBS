@@ -43,6 +43,7 @@ namespace uuepbs::ui
     {
         std::string id;
         std::string label;
+        std::string key{"player"}; // actor key: "player" for the default character, else its address
     };
 
     // Characters the user can switch the sliders to (fed by the Lua script).
@@ -118,6 +119,8 @@ namespace uuepbs::ui
         void draw_presets();
         void draw_status();
         void draw_skin_picker();
+        void draw_edited_characters();
+        bool is_edited(const std::string& key) const;
 
         const PresetShelf* m_shelf{};
         PanelHost* m_host{};
@@ -141,6 +144,8 @@ namespace uuepbs::ui
         EditBook m_book{};
         uint64_t m_book_revision{~0ull};
         std::vector<RigSummary> m_rigs{};
+        std::vector<ActorSummary> m_edited{}; // characters with sliders (active first)
+        std::vector<std::string> m_remembered{}; // NPC identities with saved sliders
         Clock::time_point m_rigs_time{};
 
         // morph targets

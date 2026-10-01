@@ -9,6 +9,7 @@
 // Because nothing is linked against UE4SS, the same DLL works with any UE4SS build
 // that runs Lua mods.
 #include "core/body_groups.hpp"
+#include "core/character_memory.hpp"
 #include "core/bridge.hpp"
 #include "core/json.hpp"
 #include "core/morphs.hpp"
@@ -41,7 +42,7 @@ namespace
     namespace fs = std::filesystem;
     using Clock = std::chrono::steady_clock;
 
-    constexpr const char* kVersion = "v2.2.0";
+    constexpr const char* kVersion = "v2.6.1";
 
     fs::path module_folder()
     {
@@ -187,7 +188,7 @@ namespace
             std::vector<uuepbs::ui::TargetChoice> out;
             for (const auto& c : m_state.candidates)
             {
-                out.push_back({c.id, c.label});
+                out.push_back({c.id, c.label, c.key});
             }
             return out;
         }
@@ -195,7 +196,7 @@ namespace
         uuepbs::ui::TargetChoice current_target() override
         {
             std::lock_guard guard(m_lock);
-            return {m_state.target.id, m_state.target.label};
+            return {m_state.target.id, m_state.target.label, m_state.target.key};
         }
 
         void pick_target(const std::string& id) override
@@ -354,10 +355,45 @@ namespace
                 if (!uuepbs::hook::active())
                 {
                     m_hook_attempts.clear(); // start over on the next poll
+                    m_last_hook_line.clear();
                 }
             }
             report_rigs();
+            persist_characters();
             publish();
+        }
+
+        // ---------------------------------------------------------------- remembered NPCs
+        void restore_character(const std::string& key, const std::string& identity, const std::string& label)
+        {
+            if (m_characters.restore(uuepbs::Registry::instance(), key, identity, label))
+            {
+                uuepbs::ui::post_message("Restored " + label + "'s sliders");
+            }
+        }
+
+        void persist_characters()
+        {
+            if (!m_characters.ready())
+            {
+                return;
+            }
+            uuepbs::Registry& reg = uuepbs::Registry::instance();
+            const auto now = Clock::now();
+            m_characters.persist(reg, now);
+            // The list Lua looks out for (and the window shows), refreshed every few seconds.
+            if (now >= m_char_list_check)
+            {
+                m_char_list_check = now + std::chrono::seconds(3);
+                std::vector<std::string> list = m_characters.list();
+                reg.set_remembered(list);
+                std::lock_guard guard(m_lock);
+                if (list != m_out.remembered)
+                {
+                    m_out.remembered = std::move(list);
+                    m_out_dirty = true;
+                }
+            }
         }
 
         // Lua refreshes the Character picker only while the window is open (listing actors is
@@ -594,10 +630,37 @@ namespace
                 m_out.lua_session = state.session;
                 m_out.replies.clear();
                 m_hook_attempts.clear();
+                m_last_hook_line.clear();
                 m_out_dirty = true;
             }
 
             setup(state);
+            // The character picked in the window gets the sliders; others keep their own edits.
+            reg.set_active_actor(state.target.key, state.target.label, state.target.id);
+            for (const std::string& key : state.gone)
+            {
+                const auto edited = reg.edited_actors();
+                const auto it = std::find_if(edited.begin(), edited.end(), [&](const uuepbs::ActorSummary& a) { return a.key == key; });
+                if (it != edited.end() && key != uuepbs::kPlayerActor)
+                {
+                    g_log.line("character " + it->label + " is gone" + (it->identity.empty() ? "; its sliders were dropped" : " (still remembered as " + it->identity + ")"));
+                    reg.forget_actor(key, false); // despawned, not released: a remembered NPC comes back with its sliders
+                }
+            }
+            // Remembered NPCs: picked in the window, or found near the player by Lua.
+            if (state.target.key != uuepbs::kPlayerActor && !state.target.identity.empty())
+            {
+                reg.set_actor_identity(state.target.key, state.target.identity);
+                restore_character(state.target.key, state.target.identity, state.target.label);
+            }
+            for (const auto& n : state.npcs)
+            {
+                if (n.key != uuepbs::kPlayerActor)
+                {
+                    reg.set_actor_identity(n.key, n.identity);
+                    restore_character(n.key, n.identity, n.label);
+                }
+            }
             sync_rigs(state);
             sync_morph_names(state);
 
@@ -657,6 +720,8 @@ namespace
                 dir = dir.lexically_normal();
                 migrate_presets(dir);
                 m_shelf.set_folder(dir);
+                m_characters.set_folder(dir / L"_characters"); // remembered NPC sliders, one file per identity
+                m_characters.set_log([](const std::string& t) { g_log.line(t); });
                 m_shelf_source = folder;
                 g_log.line("presets folder: " + uuepbs::path_to_utf8(m_shelf.folder()));
             }
@@ -668,17 +733,19 @@ namespace
                 uuepbs::EditBook book;
                 uuepbs::MorphBook morphs;
                 std::string message;
+                // Both go to the player (default character); NPC sliders last for one game session.
+                uuepbs::Registry& r = uuepbs::Registry::instance();
                 if (!startup.empty() && m_shelf.load(startup, book, message, &morphs))
                 {
-                    uuepbs::Registry::instance().replace_edits(std::move(book));
-                    uuepbs::Registry::instance().replace_morphs(std::move(morphs));
+                    r.replace_edits_of(uuepbs::kPlayerActor, std::move(book));
+                    r.replace_morphs_of(uuepbs::kPlayerActor, std::move(morphs));
                     g_log.line("startup preset: " + message);
                 }
                 else if (state.setting("restore", "1") == "1" && m_shelf.exists(uuepbs::PresetShelf::kSessionName) &&
                          m_shelf.load(uuepbs::PresetShelf::kSessionName, book, message, &morphs))
                 {
-                    uuepbs::Registry::instance().replace_edits(std::move(book));
-                    uuepbs::Registry::instance().replace_morphs(std::move(morphs));
+                    r.replace_edits_of(uuepbs::kPlayerActor, std::move(book));
+                    r.replace_morphs_of(uuepbs::kPlayerActor, std::move(morphs));
                     g_log.line("restored last session: " + message);
                 }
             }
@@ -747,7 +814,7 @@ namespace
 
         static std::string rig_key(const uuepbs::bridge::RigInfo& r)
         {
-            std::string key = r.label + '|' + r.owner + '|' + (r.primary ? "1" : "0") + '|' + std::to_string(r.names.size());
+            std::string key = r.label + '|' + r.owner + '|' + r.actor + '|' + (r.primary ? "1" : "0") + '|' + std::to_string(r.names.size());
             for (const auto& n : r.names)
             {
                 key += '|' + n;
@@ -766,6 +833,26 @@ namespace
             for (const auto& r : state.rigs)
             {
                 wanted.insert(r.address);
+            }
+            // Meshes no longer listed go first: since 2.6 Lua sends one character's change at a time
+            // (an NPC leaving range while another arrives), and near the 64-mesh limit the newcomer
+            // must not be refused for room the leaver still holds. The order of rig lines doesn't matter:
+            // everything here is keyed by component address.
+            for (auto it = m_rig_keys.begin(); it != m_rig_keys.end();)
+            {
+                if (!wanted.count(it->first))
+                {
+                    reg.untrack(it->first);
+                    it = m_rig_keys.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
+            std::string skipped; // one line per change, not one per mesh per bridge update
+            for (const auto& r : state.rigs)
+            {
                 const std::string key = rig_key(r);
                 const auto it = m_rig_keys.find(r.address);
                 if (it != m_rig_keys.end() && it->second == key && reg.is_tracked(r.address))
@@ -773,7 +860,7 @@ namespace
                     continue;
                 }
                 std::string message;
-                if (reg.track(r.address, r.label, r.owner, r.names, r.parents, r.primary, message))
+                if (reg.track(r.address, r.label, r.owner, r.names, r.parents, r.primary, message, r.actor))
                 {
                     m_rig_keys[r.address] = key;
                     if (!r.reference.empty())
@@ -785,19 +872,15 @@ namespace
                 else
                 {
                     m_rig_keys.erase(r.address);
-                    g_log.line("skipped " + r.label + ": " + message);
+                    skipped += (skipped.empty() ? "" : ", ") + r.owner + " / " + r.label + " (" + message + ")";
                 }
             }
-            for (auto it = m_rig_keys.begin(); it != m_rig_keys.end();)
+            if (skipped != m_last_skipped)
             {
-                if (!wanted.count(it->first))
+                m_last_skipped = skipped;
+                if (!skipped.empty())
                 {
-                    reg.untrack(it->first);
-                    it = m_rig_keys.erase(it);
-                }
-                else
-                {
-                    ++it;
+                    g_log.line("not tracked: " + skipped);
                 }
             }
         }
@@ -816,16 +899,18 @@ namespace
                     }
                 }
             };
+            // Only the active character's meshes: the window edits that character.
+            const std::string& active = state.target.key;
             for (const auto& r : state.rigs)
             {
-                if (r.primary)
+                if (r.primary && r.actor == active)
                 {
                     add_rig(r);
                 }
             }
             for (const auto& r : state.rigs)
             {
-                if (!r.primary)
+                if (!r.primary && r.actor == active)
                 {
                     add_rig(r);
                 }
@@ -914,10 +999,16 @@ namespace
                     continue;
                 }
                 const uuepbs::hook::Report r = uuepbs::hook::install_for(reinterpret_cast<void*>(address), bones);
+                // Each new mesh gets its own attempt, but the outcome is usually the same line ("pose hook live on
+                // vtable … slot 378 …"): log it only when it differs from the last one logged for any mesh.
                 if (r.message != a.last_message)
                 {
-                    g_log.line(r.message);
                     a.last_message = r.message;
+                    if (r.message != m_last_hook_line)
+                    {
+                        m_last_hook_line = r.message;
+                        g_log.line(r.message);
+                    }
                 }
                 switch (r.outcome)
                 {
@@ -989,8 +1080,13 @@ namespace
             std::string text;
             uuepbs::Registry& reg = uuepbs::Registry::instance();
             uint64_t morph_rev = 0;
-            const uuepbs::MorphBook morphs = reg.morphs(&morph_rev);
+            const auto morphs = reg.all_morphs(&morph_rev);
             const bool send_morphs = reg.enabled();
+            std::vector<std::pair<std::string, std::string>> keeps;
+            for (const auto& a : reg.edited_actors())
+            {
+                keeps.emplace_back(a.key, a.label);
+            }
             {
                 std::lock_guard guard(m_lock);
                 if (morph_rev != m_out.morph_revision)
@@ -999,11 +1095,19 @@ namespace
                     m_out.morphs.clear();
                     if (send_morphs)
                     {
-                        for (const auto& [key, m] : morphs)
+                        for (const auto& [actor, book] : morphs)
                         {
-                            m_out.morphs.emplace_back(m.name, m.weight);
+                            for (const auto& [key, m] : book)
+                            {
+                                m_out.morphs.push_back({m.name, m.weight, actor});
+                            }
                         }
                     }
+                    m_out_dirty = true;
+                }
+                if (keeps != m_out.keeps)
+                {
+                    m_out.keeps = std::move(keeps);
                     m_out_dirty = true;
                 }
                 if (!m_out_dirty && Clock::now() - m_last_publish < std::chrono::seconds(5))
@@ -1030,6 +1134,21 @@ namespace
             s += std::string("sliders ") + (reg.enabled() ? "enabled" : "disabled") + ", " + std::to_string(reg.edits().size()) + " edited bone(s), " +
                  std::to_string(reg.morphs().size()) + " of " + std::to_string(reg.morph_names().size()) + " morph(s) set\n";
             s += "mirroring: " + reg.mirror_source() + "\n";
+            for (const auto& a : reg.edited_actors())
+            {
+                s += std::string("  ") + (a.active ? "* " : "  ") + a.label + ": " + std::to_string(a.bones) + " bone(s), " + std::to_string(a.morphs) +
+                     " morph(s)" + (a.identity.empty() ? "" : ", remembered as " + a.identity) + "\n";
+            }
+            const auto remembered = reg.remembered();
+            if (!remembered.empty())
+            {
+                s += "remembered characters:";
+                for (const std::string& id : remembered)
+                {
+                    s += " " + id;
+                }
+                s += "\n";
+            }
             s += "presets: " + uuepbs::path_to_utf8(m_shelf.folder()) + "\n";
             for (const auto& r : reg.rigs())
             {
@@ -1083,7 +1202,7 @@ namespace
                 else
                 {
                     const uuepbs::MorphBook morphs = reg.morphs();
-                    m_shelf.save(c.argument, reg.edits(), message, &morphs);
+                    m_shelf.save(c.argument, reg.edits(), message, &morphs); // the character picked in the window
                 }
                 uuepbs::ui::post_message(message);
                 return message;
@@ -1095,10 +1214,19 @@ namespace
             }
             if (v == "reset")
             {
+                if (fold_arg(c.argument) == "all")
+                {
+                    for (const auto& a : reg.edited_actors())
+                    {
+                        reg.forget_actor(a.key, true); // remembered NPCs are forgotten too
+                    }
+                    uuepbs::ui::post_message("All sliders reset on every character");
+                    return "all sliders reset on every character";
+                }
                 reg.clear_edits();
                 reg.clear_morphs();
                 uuepbs::ui::post_message("All sliders reset");
-                return "all sliders reset";
+                return "all sliders of the selected character reset (ubs reset all: every character)";
             }
             if (v == "diag")
             {
@@ -1154,6 +1282,16 @@ namespace
             return "unknown command '" + v + "'";
         }
 
+        static std::string fold_arg(const std::string& text)
+        {
+            std::string out = uuepbs::fold_case(text);
+            while (!out.empty() && out.back() == ' ')
+            {
+                out.pop_back();
+            }
+            return out;
+        }
+
         struct Attempt
         {
             bool done{};
@@ -1183,9 +1321,13 @@ namespace
         Clock::time_point m_last_read{};
 
         std::map<uintptr_t, std::string> m_rig_keys;
+        std::string m_last_skipped;
+        std::string m_last_hook_line; // last hook install message logged (same line for every mesh is logged once)
         std::map<uintptr_t, Attempt> m_hook_attempts;
 
         uuepbs::PresetShelf m_shelf;
+        uuepbs::CharacterMemory m_characters; // <presets>\_characters
+        Clock::time_point m_char_list_check{};
         std::string m_shelf_source;
         std::string m_made_dir;
         bool m_diag_logged{};

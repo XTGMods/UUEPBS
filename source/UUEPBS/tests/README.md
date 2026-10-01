@@ -23,6 +23,9 @@ Host-side tests (Linux/macOS/WSL with g++ 13+ or clang 17+). None of them need W
     ./test_bridge /tmp/uuepbs/bridge_in.txt
     for m in generic nodir broken legacy; do lua lua_harness.lua ../../../mod/UUEPBS/Scripts ./bridge_peer /tmp/uuepbs $m; done
     # the harness also fails if the script searches the object array or rewrites bridge_in.txt while idle
+    # mutation check: breaks one behaviour of main.lua at a time (per-character scans, settle checks, range,
+    # mesh budget, world-search fallbacks...) and expects the harness to catch each
+    python mutate_lua.py ../../../mod/UUEPBS/Scripts ./bridge_peer /tmp/uuepbs
 
     # window skins: skin.json parsing, image decoding and limits (needs Dear ImGui 1.92.1 sources in IMGUI=...)
     g++ -std=c++23 -I$S -I$IMGUI test_skin.cpp $S/ui/skin.cpp $S/ui/image_decode.cpp $S/core/*.cpp \

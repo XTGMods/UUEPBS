@@ -47,6 +47,7 @@ target_compile_definitions(uuepbs_imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS 
 add_library(UUEPBS SHARED
     src/dllmain.cpp
     src/core/body_groups.cpp
+    src/core/character_memory.cpp
     src/core/bridge.cpp
     src/core/mirror.cpp
     src/core/morphs.cpp

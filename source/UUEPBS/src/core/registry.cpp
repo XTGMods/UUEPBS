@@ -97,10 +97,11 @@ namespace uuepbs
 
     void Registry::rebuild_skeleton_view()
     {
+        // The window lists the bones of the active character's main mesh.
         const Rig* source = nullptr;
         for (const auto& rig : m_rigs)
         {
-            if (rig->primary && !rig->stale)
+            if (rig->primary && !rig->stale && rig->actor_key == m_active)
             {
                 source = rig.get();
                 break;
@@ -110,7 +111,7 @@ namespace uuepbs
         {
             for (const auto& rig : m_rigs)
             {
-                if (!rig->stale && (!source || rig->sculptor.bone_count() > source->sculptor.bone_count()))
+                if (!rig->stale && rig->actor_key == m_active && (!source || rig->sculptor.bone_count() > source->sculptor.bone_count()))
                 {
                     source = rig.get();
                 }
@@ -137,12 +138,18 @@ namespace uuepbs
             m_mirror_from_reference = false;
             m_mirror_source = view.names.empty() ? "not measured yet" : "waiting for a pose to measure";
         }
+        if (m_mirror.centre_axis < 0 && source && !source->reference.empty() && source->reference.size() == view.names.size())
+        {
+            // Another character became active (or came back): measure from its reference pose right away.
+            measure_mirror_locked(*source, source->reference, true, "the reference pose");
+            m_mirror_from_reference = m_mirror.centre_axis >= 0;
+        }
         m_view = std::move(view);
         m_skeleton_revision.fetch_add(1, std::memory_order_acq_rel);
     }
 
     bool Registry::track(uintptr_t component, const std::string& label, const std::string& owner, std::vector<std::string> names,
-                         std::vector<int32_t> parents, bool primary, std::string& message)
+                         std::vector<int32_t> parents, bool primary, std::string& message, const std::string& actor)
     {
         if (component == 0)
         {
@@ -183,6 +190,7 @@ namespace uuepbs
                                         }),
                          m_rigs.end());
             rebuild_hot_list();
+            prune_actors_locked();
             message = why;
             return false;
         }
@@ -193,9 +201,17 @@ namespace uuepbs
         rig->object_class = object_class;
         rig->label = label;
         rig->owner = owner;
+        const std::string key = actor.empty() ? std::string(kPlayerActor) : actor;
+        if (rig->actor_key != key)
+        {
+            rig->reference.clear();
+        }
+        rig->actor_key = key;
+        rig->actor = &actor_locked(key);
         rig->primary = primary;
         rig->stale = false;
         rig->frames = 0;
+        prune_actors_locked();
 
         rebuild_hot_list();
         rebuild_skeleton_view();
@@ -206,12 +222,17 @@ namespace uuepbs
     void Registry::set_reference_pose(uintptr_t component, std::vector<Xform> local_pose)
     {
         std::lock_guard guard(m_lock);
-        const Rig* rig = find_rig(component);
-        if (!rig || local_pose.size() != static_cast<size_t>(rig->sculptor.bone_count()) || m_view.names != rig->sculptor.names())
+        Rig* rig = find_rig(component);
+        if (!rig || local_pose.size() != static_cast<size_t>(rig->sculptor.bone_count()))
         {
             return;
         }
-        measure_mirror_locked(*rig, local_pose, true, "the reference pose");
+        rig->reference = std::move(local_pose); // kept for when this character becomes active
+        if (m_view.names != rig->sculptor.names() || rig->actor_key != m_active)
+        {
+            return;
+        }
+        measure_mirror_locked(*rig, rig->reference, true, "the reference pose");
         m_mirror_from_reference = m_mirror.centre_axis >= 0;
     }
 
@@ -236,7 +257,7 @@ namespace uuepbs
         int32_t bones = -1;
         for (const auto& rig : m_rigs)
         {
-            if (rig->stale)
+            if (rig->stale || rig->actor_key != m_active)
             {
                 continue;
             }
@@ -266,6 +287,7 @@ namespace uuepbs
         {
             rebuild_hot_list();
             rebuild_skeleton_view();
+            prune_actors_locked();
         }
     }
 
@@ -275,6 +297,7 @@ namespace uuepbs
         m_rigs.clear();
         rebuild_hot_list();
         rebuild_skeleton_view();
+        prune_actors_locked();
     }
 
     bool Registry::is_tracked(uintptr_t component) const
@@ -357,11 +380,12 @@ namespace uuepbs
             return;
         }
 
+        // Each mesh is sculpted with its own character's edits.
         const bool on = m_enabled.load(std::memory_order_relaxed);
-        const uint64_t wanted = m_edit_revision.load(std::memory_order_acquire) | (on ? 0 : kDisabledBit);
+        const uint64_t wanted = rig->actor->revision | (on ? 0 : kDisabledBit);
         if (rig->sculptor.bound_revision() != wanted)
         {
-            rig->sculptor.bind(on ? m_book : m_empty_book, wanted);
+            rig->sculptor.bind(on ? rig->actor->book : m_empty_book, wanted);
         }
         // No reference pose from Lua: measure mirroring from an early live frame instead
         // (before this frame's edits are applied).
@@ -430,9 +454,242 @@ namespace uuepbs
         }
     }
 
-    void Registry::bump_edits()
+    void Registry::bump_edits(Actor& actor)
     {
-        m_edit_revision.fetch_add(1, std::memory_order_acq_rel);
+        actor.revision = m_edit_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
+    }
+
+    Registry::Actor& Registry::actor_locked(const std::string& key)
+    {
+        auto it = m_actors.find(key);
+        if (it == m_actors.end())
+        {
+            it = m_actors.emplace(key, Actor{}).first;
+            it->second.label = key == kPlayerActor ? "Player" : key;
+            it->second.pick_id = key == kPlayerActor ? "auto" : key;
+            bump_edits(it->second); // a revision no other actor has
+        }
+        return it->second;
+    }
+
+    // Characters with no edits, no meshes and not active are forgotten.
+    void Registry::prune_actors_locked()
+    {
+        for (auto it = m_actors.begin(); it != m_actors.end();)
+        {
+            const bool used = it->first == m_active || it->first == kPlayerActor || !it->second.book.empty() ||
+                              std::any_of(m_rigs.begin(), m_rigs.end(), [&](const auto& r) { return r->actor == &it->second; });
+            it = used ? std::next(it) : m_actors.erase(it);
+        }
+    }
+
+    void Registry::set_active_actor(const std::string& key_in, const std::string& label, const std::string& pick_id)
+    {
+        const std::string key = key_in.empty() ? std::string(kPlayerActor) : key_in;
+        {
+            std::lock_guard guard(m_lock);
+            Actor& a = actor_locked(key);
+            if (!label.empty())
+            {
+                a.label = label;
+            }
+            if (!pick_id.empty())
+            {
+                a.pick_id = pick_id;
+            }
+            if (m_active == key)
+            {
+                return;
+            }
+            m_active = key;
+            m_edit_revision.fetch_add(1, std::memory_order_acq_rel); // the window re-reads edits()
+            rebuild_skeleton_view();
+            prune_actors_locked();
+        }
+        std::lock_guard morph_guard(m_morph_lock);
+        m_morph_active = key;
+        m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
+        m_morph_names_revision.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    std::string Registry::active_actor() const
+    {
+        std::lock_guard guard(m_lock);
+        return m_active;
+    }
+
+    std::vector<ActorSummary> Registry::edited_actors() const
+    {
+        std::vector<ActorSummary> out;
+        std::map<std::string, size_t> morph_counts;
+        {
+            std::lock_guard morph_guard(m_morph_lock);
+            for (const auto& [key, book] : m_morph_books)
+            {
+                if (!book.empty())
+                {
+                    morph_counts[key] = book.size();
+                }
+            }
+        }
+        std::lock_guard guard(m_lock);
+        for (const auto& [key, a] : m_actors)
+        {
+            const auto m = morph_counts.find(key);
+            const size_t morphs = m == morph_counts.end() ? 0 : m->second;
+            if (a.book.empty() && morphs == 0)
+            {
+                continue;
+            }
+            out.push_back({key, a.label, a.pick_id, a.book.size(), morphs, key == m_active, a.identity});
+        }
+        // morphs only, character not known to the bone side (should not happen, but keep them)
+        for (const auto& [key, n] : morph_counts)
+        {
+            if (!m_actors.count(key))
+            {
+                out.push_back({key, key == kPlayerActor ? "Player" : key, key == kPlayerActor ? "auto" : key, 0, n, key == m_active, {}});
+            }
+        }
+        std::stable_partition(out.begin(), out.end(), [](const ActorSummary& s) { return s.active; });
+        return out;
+    }
+
+    void Registry::forget_actor(const std::string& key, bool forget_memory)
+    {
+        {
+            std::lock_guard guard(m_lock);
+            const auto it = m_actors.find(key);
+            if (it != m_actors.end())
+            {
+                if (!it->second.identity.empty())
+                {
+                    if (forget_memory)
+                    {
+                        m_forgotten.push_back(it->second.identity);
+                    }
+                    it->second.identity.clear(); // either way this actor no longer stands for that character
+                }
+                if (!it->second.book.empty())
+                {
+                    it->second.book.clear();
+                    bump_edits(it->second);
+                }
+            }
+            prune_actors_locked();
+        }
+        std::lock_guard morph_guard(m_morph_lock);
+        if (m_morph_books.erase(key) > 0)
+        {
+            m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
+        }
+    }
+
+    void Registry::set_actor_identity(const std::string& key, const std::string& identity)
+    {
+        if (key.empty() || key == kPlayerActor)
+        {
+            return;
+        }
+        std::lock_guard guard(m_lock);
+        actor_locked(key).identity = identity;
+    }
+
+    std::vector<CharacterBook> Registry::character_books() const
+    {
+        std::vector<CharacterBook> out;
+        std::vector<std::string> keys;
+        {
+            std::lock_guard guard(m_lock);
+            for (const auto& [key, a] : m_actors)
+            {
+                if (key != kPlayerActor && !a.identity.empty())
+                {
+                    out.push_back({a.identity, a.label, a.book, {}});
+                    keys.push_back(key);
+                }
+            }
+        }
+        std::lock_guard morph_guard(m_morph_lock);
+        for (size_t i = 0; i < out.size(); ++i)
+        {
+            const auto it = m_morph_books.find(keys[i]);
+            if (it != m_morph_books.end())
+            {
+                out[i].morphs = it->second;
+            }
+        }
+        return out;
+    }
+
+    std::vector<std::string> Registry::take_forgotten_identities()
+    {
+        std::lock_guard guard(m_lock);
+        std::vector<std::string> out;
+        out.swap(m_forgotten);
+        return out;
+    }
+
+    void Registry::set_remembered(std::vector<std::string> identities)
+    {
+        std::lock_guard guard(m_lock);
+        m_remembered = std::move(identities);
+    }
+
+    std::vector<std::string> Registry::remembered() const
+    {
+        std::lock_guard guard(m_lock);
+        return m_remembered;
+    }
+
+    EditBook Registry::edits_of(const std::string& key) const
+    {
+        std::lock_guard guard(m_lock);
+        const auto it = m_actors.find(key);
+        return it == m_actors.end() ? EditBook{} : it->second.book;
+    }
+
+    void Registry::replace_edits_of(const std::string& key, EditBook book)
+    {
+        std::lock_guard guard(m_lock);
+        Actor& a = actor_locked(key);
+        a.book = std::move(book);
+        bump_edits(a);
+    }
+
+    MorphBook Registry::morphs_of(const std::string& key) const
+    {
+        std::lock_guard guard(m_morph_lock);
+        const auto it = m_morph_books.find(key);
+        return it == m_morph_books.end() ? MorphBook{} : it->second;
+    }
+
+    void Registry::replace_morphs_of(const std::string& key, MorphBook book)
+    {
+        for (auto& [k, e] : book)
+        {
+            e.weight = clamp_morph(e.weight);
+        }
+        std::lock_guard guard(m_morph_lock);
+        if (book.empty())
+        {
+            m_morph_books.erase(key);
+        }
+        else
+        {
+            m_morph_books[key] = std::move(book);
+        }
+        m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    std::map<std::string, MorphBook> Registry::all_morphs(uint64_t* revision) const
+    {
+        std::lock_guard guard(m_morph_lock);
+        if (revision)
+        {
+            *revision = m_morph_revision.load(std::memory_order_acquire);
+        }
+        return m_morph_books;
     }
 
     EditBook Registry::edits(uint64_t* revision) const
@@ -442,7 +699,8 @@ namespace uuepbs
         {
             *revision = m_edit_revision.load(std::memory_order_acquire);
         }
-        return m_book;
+        const auto it = m_actors.find(m_active);
+        return it == m_actors.end() ? EditBook{} : it->second.book;
     }
 
     void Registry::set_bone(const std::string& bone, const BoneEdit& scale)
@@ -454,33 +712,37 @@ namespace uuepbs
         BoneEdit s = scale;
         s.clamp();
         std::lock_guard guard(m_lock);
-        EditEntry& entry = m_book[fold_case(bone)];
+        Actor& a = active_locked();
+        EditEntry& entry = a.book[fold_case(bone)];
         entry.bone = bone;
         entry.edit = s;
-        bump_edits();
+        bump_edits(a);
     }
 
     void Registry::clear_bone(const std::string& bone)
     {
         std::lock_guard guard(m_lock);
-        if (m_book.erase(fold_case(bone)) > 0)
+        Actor& a = active_locked();
+        if (a.book.erase(fold_case(bone)) > 0)
         {
-            bump_edits();
+            bump_edits(a);
         }
     }
 
     void Registry::replace_edits(EditBook book)
     {
         std::lock_guard guard(m_lock);
-        m_book = std::move(book);
-        bump_edits();
+        Actor& a = active_locked();
+        a.book = std::move(book);
+        bump_edits(a);
     }
 
     void Registry::clear_edits()
     {
         std::lock_guard guard(m_lock);
-        m_book.clear();
-        bump_edits();
+        Actor& a = active_locked();
+        a.book.clear();
+        bump_edits(a);
     }
 
     void Registry::set_enabled(bool on)
@@ -496,7 +758,8 @@ namespace uuepbs
         {
             *revision = m_morph_revision.load(std::memory_order_acquire);
         }
-        return m_morphs;
+        const auto it = m_morph_books.find(m_morph_active);
+        return it == m_morph_books.end() ? MorphBook{} : it->second;
     }
 
     void Registry::set_morph(const std::string& morph, double weight)
@@ -506,7 +769,7 @@ namespace uuepbs
             return;
         }
         std::lock_guard guard(m_morph_lock);
-        MorphEntry& e = m_morphs[fold_case(morph)];
+        MorphEntry& e = m_morph_books[m_morph_active][fold_case(morph)];
         e.name = morph;
         e.weight = clamp_morph(weight);
         m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
@@ -515,8 +778,13 @@ namespace uuepbs
     void Registry::clear_morph(const std::string& morph)
     {
         std::lock_guard guard(m_morph_lock);
-        if (m_morphs.erase(fold_case(morph)) > 0)
+        auto it = m_morph_books.find(m_morph_active);
+        if (it != m_morph_books.end() && it->second.erase(fold_case(morph)) > 0)
         {
+            if (it->second.empty())
+            {
+                m_morph_books.erase(it);
+            }
             m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
         }
     }
@@ -528,14 +796,21 @@ namespace uuepbs
             e.weight = clamp_morph(e.weight);
         }
         std::lock_guard guard(m_morph_lock);
-        m_morphs = std::move(book);
+        if (book.empty())
+        {
+            m_morph_books.erase(m_morph_active);
+        }
+        else
+        {
+            m_morph_books[m_morph_active] = std::move(book);
+        }
         m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
     }
 
     void Registry::clear_morphs()
     {
         std::lock_guard guard(m_morph_lock);
-        m_morphs.clear();
+        m_morph_books.erase(m_morph_active);
         m_morph_revision.fetch_add(1, std::memory_order_acq_rel);
     }
 
@@ -588,7 +863,7 @@ namespace uuepbs
         out.reserve(m_rigs.size());
         for (const auto& rig : m_rigs)
         {
-            out.push_back({rig->label, rig->owner, rig->sculptor.bone_count(), rig->frames, rig->stale, rig->primary});
+            out.push_back({rig->label, rig->owner, rig->sculptor.bone_count(), rig->frames, rig->stale, rig->primary, rig->actor_key, rig->actor_key == m_active});
         }
         return out;
     }

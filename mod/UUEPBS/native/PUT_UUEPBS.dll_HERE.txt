@@ -1,1 +1,0 @@
-Put UUEPBS.dll (built from source/UUEPBS) in this folder. The mod creates bridge_in.txt, bridge_out.txt and UUEPBS.log here while the game runs.

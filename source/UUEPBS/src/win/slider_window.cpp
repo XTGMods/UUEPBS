@@ -664,8 +664,12 @@ namespace uuepbs::ui
                     return;
                 }
                 uint64_t book_rev = 0, morph_rev = 0;
-                const EditBook book = Registry::instance().edits(&book_rev);
-                const MorphBook morphs = Registry::instance().morphs(&morph_rev);
+                // The session file holds the player's sliders (NPC sliders last for one game session).
+                Registry& reg = Registry::instance();
+                book_rev = reg.edit_revision();
+                morph_rev = reg.morph_revision();
+                const EditBook book = reg.edits_of(kPlayerActor);
+                const MorphBook morphs = reg.morphs_of(kPlayerActor);
                 std::string ignored;
                 m_shelf->save(PresetShelf::kSessionName, book, ignored, &morphs);
                 m_saved_revision = {book_rev, morph_rev};

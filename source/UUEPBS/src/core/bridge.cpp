@@ -115,11 +115,20 @@ namespace uuepbs::bridge
             }
             else if (kind == "target" && f.size() >= 3)
             {
-                state.target = {std::string(f[1]), std::string(f[2])};
+                state.target = {std::string(f[1]), std::string(f[2]), f.size() >= 4 && !f[3].empty() ? std::string(f[3]) : std::string("player"),
+                                f.size() >= 5 ? std::string(f[4]) : std::string()};
             }
             else if (kind == "cand" && f.size() >= 3)
             {
-                state.candidates.push_back({std::string(f[1]), std::string(f[2])});
+                state.candidates.push_back({std::string(f[1]), std::string(f[2]), f.size() >= 4 && !f[3].empty() ? std::string(f[3]) : std::string(f[1]), {}});
+            }
+            else if (kind == "npc" && f.size() >= 3 && !f[1].empty() && !f[2].empty())
+            {
+                state.npcs.push_back({std::string(f[1]), std::string(f[2]), f.size() >= 4 ? std::string(f[3]) : std::string(f[2])});
+            }
+            else if (kind == "gone" && f.size() >= 2 && !f[1].empty())
+            {
+                state.gone.emplace_back(f[1]);
             }
             else if (kind == "rig" && f.size() >= 4)
             {
@@ -128,6 +137,7 @@ namespace uuepbs::bridge
                 r.label = std::string(f[2]);
                 r.primary = f[3] == "1";
                 r.owner = f.size() >= 5 ? std::string(f[4]) : std::string();
+                r.actor = f.size() >= 6 && !f[5].empty() ? std::string(f[5]) : std::string("player");
                 state.rigs.push_back(std::move(r));
                 rig = &state.rigs.back();
             }
@@ -271,12 +281,20 @@ namespace uuepbs::bridge
         {
             out += "reply\t" + std::to_string(r.id) + "\t" + escape_lines(r.text) + "\n";
         }
+        for (const auto& [key, label] : s.keeps)
+        {
+            out += "keep\t" + clean_field(key) + "\t" + clean_field(label) + "\n";
+        }
+        for (const std::string& id : s.remembered)
+        {
+            out += "remember\t" + clean_field(id) + "\n";
+        }
         out += "morph\t" + std::to_string(s.morph_revision) + "\n";
-        for (const auto& [name, weight] : s.morphs)
+        for (const DllState::Morph& m : s.morphs)
         {
             char buf[32];
-            std::snprintf(buf, sizeof(buf), "%.4f", weight);
-            out += "mw\t" + clean_field(name) + "\t" + buf + "\n";
+            std::snprintf(buf, sizeof(buf), "%.4f", m.weight);
+            out += "mw\t" + clean_field(m.name) + "\t" + buf + "\t" + clean_field(m.actor) + "\n";
         }
         out += "#end\n";
         return out;

@@ -1,5 +1,6 @@
 // Host-side tests for the pose sculpting core, using the real SK_Roku_v3 reference skeleton.
 #include "core/body_groups.hpp"
+#include "core/character_memory.hpp"
 #include "core/mirror.hpp"
 #include "core/presets.hpp"
 #include "core/sculpt.hpp"
@@ -615,6 +616,164 @@ int main()
         reg.on_pose_finalized(comp);
         CHECK(std::memcmp(pristine.data(), floats.data(), floats.size() * sizeof(XformF)) == 0);
         reg.untrack_all();
+    }
+
+    // Several characters: each mesh is sculpted with its own character's edits; a character the
+    // window never edited is left alone; switching the edited character keeps everyone's sliders.
+    {
+        struct FakeComp
+        {
+            alignas(16) unsigned char mem[0x1000] = {};
+            std::vector<Xform> buf[2];
+        };
+        static FakeComp player, npc, bystander;
+        const auto original = fk(s, s.local);
+        auto setup = [&](FakeComp& c, int32_t index) {
+            c.buf[0] = c.buf[1] = original;
+            auto put = [&](size_t off, auto v) { std::memcpy(c.mem + off, &v, sizeof(v)); };
+            put(0x0, (uintptr_t)0x1234);
+            put(0xC, index);
+            put(0x10, (uintptr_t)0x5555);
+            RawArray a0{c.buf[0].data(), (int32_t)c.buf[0].size(), (int32_t)c.buf[0].size()};
+            RawArray a1{c.buf[1].data(), (int32_t)c.buf[1].size(), (int32_t)c.buf[1].size()};
+            put(0x600, a0);
+            put(0x610, a1);
+            put(0x648, (int32_t)1);
+        };
+        setup(player, 101);
+        setup(npc, 102);
+        setup(bystander, 103);
+        Registry& reg = Registry::instance();
+        reg.set_layout(PoseLayout{0x600, 0x648, 16, 96});
+        reg.set_active_actor(kPlayerActor, "Roku", "auto");
+        std::string msg;
+        CHECK(reg.track((uintptr_t)player.mem, "CharacterMesh0", "Roku", s.names, s.parents, true, msg, kPlayerActor));
+        reg.set_reference_pose((uintptr_t)player.mem, s.local);
+        const EditBook player_book = book_of({{"head", 1.3, 1.3, 1.3, Spread::Chain}});
+        reg.replace_edits(player_book);
+
+        // pick the NPC: it is tracked (it is the selected one) but has no edits yet
+        reg.set_active_actor("4D5E", "Guard", "4D5E");
+        CHECK(reg.edits().empty());
+        CHECK(reg.track((uintptr_t)npc.mem, "CharacterMesh0", "Guard", s.names, s.parents, true, msg, "4D5E"));
+        CHECK(reg.track((uintptr_t)bystander.mem, "CharacterMesh0", "Bystander", s.names, s.parents, true, msg, "9999"));
+        CHECK(reg.skeleton().owner == "Guard"); // the window lists the selected character's bones
+        reg.on_pose_finalized(player.mem);
+        reg.on_pose_finalized(npc.mem);
+        reg.on_pose_finalized(bystander.mem);
+        CHECK(worst(player.buf[1], reference(s, s.local, player_book)) < 1e-6); // the player keeps its sliders
+        CHECK(worst(npc.buf[1], original) == 0);                                 // nothing moved yet: untouched
+        CHECK(worst(bystander.buf[1], original) == 0);
+
+        const EditBook npc_book = book_of({{"thigh_l", 1.0, 1.2, 1.2, Spread::Keep}});
+        reg.replace_edits(npc_book);
+        reg.on_pose_finalized(player.mem);
+        reg.on_pose_finalized(npc.mem);
+        reg.on_pose_finalized(bystander.mem);
+        CHECK(worst(npc.buf[1], reference(s, s.local, npc_book)) < 1e-6);
+        CHECK(worst(player.buf[1], reference(s, s.local, player_book)) < 1e-6);
+        CHECK(worst(bystander.buf[1], original) == 0);
+        reg.set_morph("Smile", 0.5);
+        auto edited = reg.edited_actors();
+        CHECK(edited.size() == 2 && edited[0].key == "4D5E" && edited[0].active && edited[0].bones == 1 && edited[0].morphs == 1 && edited[1].key == kPlayerActor);
+        CHECK(reg.all_morphs().size() == 1 && reg.all_morphs().count("4D5E"));
+
+        // back to the player: both keep their sliders, the window shows the player's again
+        reg.set_active_actor(kPlayerActor, "Roku", "auto");
+        CHECK(reg.edits().size() == 1 && reg.edits().count("head") && reg.morphs().empty());
+        CHECK(reg.edits_of("4D5E").count("thigh_l") && reg.morphs_of("4D5E").count("smile"));
+        CHECK(reg.skeleton().owner == "Roku");
+        CHECK(reg.mirror_table().pairs == 71); // re-measured from the player's stored reference pose
+        reg.on_pose_finalized(npc.mem);
+        CHECK(worst(npc.buf[1], reference(s, s.local, npc_book)) < 1e-6);
+
+        // release the NPC: its pose comes back untouched, the player is unaffected
+        reg.forget_actor("4D5E");
+        reg.on_pose_finalized(npc.mem);
+        reg.on_pose_finalized(player.mem);
+        CHECK(worst(npc.buf[1], original) < 1e-9);
+        CHECK(worst(player.buf[1], reference(s, s.local, player_book)) < 1e-6);
+        edited = reg.edited_actors();
+        CHECK(edited.size() == 1 && edited[0].key == kPlayerActor && reg.all_morphs().empty());
+
+        // the session file holds the player's sliders whoever is selected
+        reg.set_active_actor("4D5E", "Guard", "4D5E");
+        CHECK(reg.edits_of(kPlayerActor).count("head") && reg.edits().empty());
+        reg.set_active_actor(kPlayerActor, "Roku", "auto");
+        reg.clear_edits();
+        reg.untrack_all();
+    }
+
+    // Remembered NPCs: saved per identity, restored on the next appearance, forgotten on reset/release.
+    {
+        namespace fs = std::filesystem;
+        const fs::path dir = "/tmp/claude-uuepbs-test/UUEPBS Presets/_characters";
+        fs::remove_all(dir);
+        Registry& reg = Registry::instance();
+        CharacterMemory mem;
+        std::vector<std::string> logged;
+        mem.set_log([&](const std::string& t) { logged.push_back(t); });
+        mem.set_folder(dir);
+        const auto t0 = CharacterMemory::Clock::now();
+        auto later = [&](int seconds) { return t0 + std::chrono::seconds(seconds); };
+
+        // Anca is picked and edited: saved a second after the last change
+        reg.set_active_actor("A1", "Anca_243", "A1");
+        reg.set_actor_identity("A1", "Anca");
+        reg.replace_edits(book_of({{"breast_l", 1.4, 1.4, 1.4, Spread::Chain}}));
+        reg.set_morph("BreastSize", 0.8);
+        mem.persist(reg, later(0));
+        CHECK(!fs::exists(dir / "Anca.json")); // still being edited
+        mem.persist(reg, later(2));
+        CHECK(fs::exists(dir / "Anca.json") && mem.list() == std::vector<std::string>{"Anca"});
+
+        // save reload: the old actor despawns (memory kept), a new Anca appears and gets her sliders back
+        reg.set_active_actor(kPlayerActor, "Coen", "auto");
+        reg.forget_actor("A1", false);
+        mem.persist(reg, later(3));
+        CHECK(fs::exists(dir / "Anca.json") && reg.edits_of("A1").empty());
+        CHECK(mem.restore(reg, "B7", "Anca", "Anca_17"));
+        CHECK(reg.edits_of("B7").count("breast_l") && reg.morphs_of("B7").count("breastsize"));
+        CHECK(!mem.restore(reg, "B7", "Anca", "Anca_17")); // once per appearance
+        reg.set_actor_identity("B7", "Anca");
+        mem.persist(reg, later(5));
+        CHECK(fs::exists(dir / "Anca.json"));
+
+        // sliders made this time win over the memory
+        reg.set_active_actor("D4", "Lacra_9", "D4");
+        reg.replace_edits(book_of({{"pelvis", 1.2, 1.2, 1.2, Spread::Keep}}));
+        CHECK(!mem.restore(reg, "D4", "Anca", "Lacra_9"));
+        CHECK(reg.edits_of("D4").count("pelvis") && !reg.edits_of("D4").count("breast_l"));
+        reg.set_actor_identity("D4", "Lacra");
+        mem.persist(reg, later(6));
+        mem.persist(reg, later(8));
+        CHECK(fs::exists(dir / "Lacra.json") && mem.list().size() == 2);
+
+        // a new session where an NPC is picked before its sliders came back must not lose its file
+        {
+            CharacterMemory fresh;
+            fresh.set_folder(dir);
+            reg.set_active_actor("E5", "Lacra_2", "E5");
+            reg.set_actor_identity("E5", "Lacra");
+            fresh.persist(reg, later(9));
+            fresh.persist(reg, later(12));
+            CHECK(fs::exists(dir / "Lacra.json"));
+            CHECK(fresh.restore(reg, "E5", "Lacra", "Lacra_2") && reg.edits_of("E5").count("pelvis"));
+            reg.forget_actor("E5", false);
+        }
+
+        // Reset all on Anca forgets her; Release on Lacra forgets her
+        reg.set_active_actor("B7", "Anca_17", "B7");
+        reg.clear_edits();
+        reg.clear_morphs();
+        mem.persist(reg, later(13));
+        CHECK(!fs::exists(dir / "Anca.json"));
+        reg.forget_actor("D4", true);
+        mem.persist(reg, later(14));
+        CHECK(!fs::exists(dir / "Lacra.json") && mem.list().empty());
+        reg.set_active_actor(kPlayerActor, "Coen", "auto");
+        reg.forget_actor("B7", true);
+        CHECK(!logged.empty());
     }
 
     // Cost of the pose hook callback (it runs for every skeletal mesh in the game, every frame).

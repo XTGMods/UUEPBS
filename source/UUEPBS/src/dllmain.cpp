@@ -42,7 +42,7 @@ namespace
     namespace fs = std::filesystem;
     using Clock = std::chrono::steady_clock;
 
-    constexpr const char* kVersion = "v2.6.2";
+    constexpr const char* kVersion = "v2.7.1";
 
     fs::path module_folder()
     {
@@ -654,6 +654,16 @@ namespace
                     reg.forget_actor(key, false); // despawned, not released: a remembered NPC comes back with its sliders
                 }
             }
+            // Character Switch Watcher: the player character changed (same pawn, another party member).
+            if (!state.switch_who.empty())
+            {
+                const std::string line = m_characters.switch_player(reg, state.switch_who, Clock::now());
+                if (!line.empty())
+                {
+                    g_log.line("character switch: " + line);
+                    uuepbs::ui::post_message("Now playing " + state.switch_who);
+                }
+            }
             // Remembered NPCs: picked in the window, or found near the player by Lua.
             if (state.target.key != uuepbs::kPlayerActor && !state.target.identity.empty())
             {
@@ -667,6 +677,16 @@ namespace
                     reg.set_actor_identity(n.key, n.identity);
                     restore_character(n.key, n.identity, n.label);
                 }
+            }
+            // Character Switch Watcher: the party members' followers share those sliders (they don't keep NPC files of their own)
+            {
+                std::vector<uuepbs::CharacterMemory::PartyLink> links;
+                for (const auto& p : state.party)
+                {
+                    reg.set_actor_identity(p.key, "");
+                    links.push_back({p.key, p.identity, p.label});
+                }
+                m_characters.set_party_links(std::move(links));
             }
             sync_rigs(state);
             sync_morph_names(state);

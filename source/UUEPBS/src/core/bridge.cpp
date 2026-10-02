@@ -126,6 +126,14 @@ namespace uuepbs::bridge
             {
                 state.npcs.push_back({std::string(f[1]), std::string(f[2]), f.size() >= 4 ? std::string(f[3]) : std::string(f[2])});
             }
+            else if (kind == "party" && f.size() >= 3 && !f[1].empty() && !f[2].empty())
+            {
+                state.party.push_back({std::string(f[1]), std::string(f[2]), f.size() >= 4 ? std::string(f[3]) : std::string(f[1])});
+            }
+            else if (kind == "switch" && f.size() >= 2 && !f[1].empty())
+            {
+                state.switch_who = std::string(f[1]);
+            }
             else if (kind == "gone" && f.size() >= 2 && !f[1].empty())
             {
                 state.gone.emplace_back(f[1]);

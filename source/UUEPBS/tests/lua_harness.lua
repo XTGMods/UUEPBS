@@ -76,6 +76,7 @@ local npc = obj("BP_Guard_C /Game/Maps/Lvl.Lvl:PersistentLevel.BP_Guard_C_3")
 local cdo = obj("BP_Guard_C /Game/Chars/BP_Guard.Default__BP_Guard_C")
 
 local refCalls, scanCalls, searches, morphReads, morphWrites = 0, 0, 0, 0, 0
+local charSearches = 0 -- FindAllOf("Character")
 local function comp(name, outer, mesh, names, parents, withRef)
     local c = obj("SkeletalMeshComponent /Game/Maps/Lvl.Lvl:PersistentLevel." .. name)
     c.GetFName = function() return FNameObj(name) end
@@ -171,6 +172,7 @@ function FindAllOf(name)
     if name == "PlayerController" then return { pc } end
     if name == "BP_Rokuv3_C" then return actor._valid and { actor } or nil end
     if name == "Character" then
+        charSearches = charSearches + 1
         local l = { actor, npc, cdo }
         for _, c in ipairs(extraChars) do l[#l + 1] = c end
         return l
@@ -242,6 +244,8 @@ end
 -- GON runs with the smallest mesh budget (8) so a crowd overflows it
 local cfg = dofile(scripts .. "/config.lua")
 if mode == "gon" then cfg.MaxTrackedMeshes = 8 end
+-- legacy: a config.lua from before 2.7, without the CharacterSwitchWatcher line (watcher stays off)
+if mode == "legacy" then cfg.CharacterSwitchWatcher = nil end
 package.loaded["config"] = cfg
 dofile(scripts .. "/main.lua")
 local json = dofile(scripts .. "/uuepbs_json.lua")
@@ -291,6 +295,7 @@ if mode == "nodir" then
 end
 check(s:find("presets " .. project:gsub("%p", "%%%0") .. "\\Binaries\\Win64\\UUEPBS Presets\n"), "preset folder:\n" .. s)
 check(s:find("key F6\n", 1, true), "hotkey")
+check(not s:find("\nswitch ", 1, true), "Character Switch Watcher off by default")
 check(s:find("engine 5.7\n", 1, true), "engine version")
 if mode == "gon" then
     check(read(profilePath) == read(scripts .. "/GameProfiles/Roku3.json"), "shipped profile not rewritten")
@@ -1045,6 +1050,146 @@ if mode == "gon" then
     odd._valid, oddBody._valid, leaver._valid, leaverBody._valid = false, false, false, false
     extraChars = {}
     for _ = 1, 12 do loop() end
+end
+
+-- Character Switch Watcher (config.lua, off by default): one player pawn, party members swapped in and
+-- out by changing its meshes (Clair Obscur: Expedition 33). The face mesh says who is played.
+if mode == "gon" then
+    settle()
+    s = run_peer(1, 4, "auto", 5, "dll1", 0, "-", "-", "-")
+    check(not s:find("\nswitch ", 1, true), "off: nothing reported")
+    cfg.CharacterSwitchWatcher = true
+    local function face(compName, meshName)
+        local c = comp(compName, actor, obj("SkeletalMesh /Game/Chars/" .. meshName .. "." .. meshName, { Skeleton = otherSkeleton }), { "root" }, { -1 }, false)
+        allComps[#allComps + 1] = c
+        return c
+    end
+    local headgear = face("Headgear", "SK_Helmet_A") -- a "head" match must not win over the face
+    local luneFace = face("Face", "Lune_FaceMesh")
+    local scans0 = scanCalls
+    run_peer(2, 4, "auto", 5, "dll1", 0, "-", "-", "-") -- Refresh
+    loop()
+    s = run_peer(2, 4, "auto", 5, "dll1", 0, "-", "-", "-")
+    check(s:find("\nswitch Lune_FaceMesh\n", 1, true), "played character reported by its face mesh:\n" .. s)
+    check(s:find("target auto BP_Rokuv3_C_0 (player) - Lune key=player\n", 1, true), "window shows who is played:\n" .. s)
+    check(table.concat(printed, ""):find("Character Switch Watcher: playing as Lune_FaceMesh", 1, true), "logged")
+    -- switch to Maelle: the game swaps the meshes; her face comes back under a made-up component name
+    luneFace._valid = false
+    local maelleFace = face("SkeletalMeshComponent_2147474444", "Maelle_v2_FaceMesh")
+    for _ = 1, 15 do loop() end
+    s = run_peer(2, 4, "auto", 5, "dll1", 0, "-", "-", "-")
+    check(s:find("\nswitch Maelle_v2_FaceMesh\n", 1, true) and s:find("(player) - Maelle_v2 key=player", 1, true), "switch noticed, face found by its asset name:\n" .. s)
+    -- the same face component gets another face (Gustave): noticed from the asset alone
+    local gustave = obj("SkeletalMesh /Game/Chars/Gustave_FaceMesh.Gustave_FaceMesh", { Skeleton = otherSkeleton })
+    maelleFace.SkeletalMeshAsset, maelleFace.GetSkinnedAsset = gustave, function() return gustave end
+    for _ = 1, 15 do loop() end
+    s = run_peer(2, 4, "auto", 5, "dll1", 0, "-", "-", "-")
+    check(s:find("\nswitch Gustave_FaceMesh\n", 1, true), "face asset swap noticed:\n" .. s)
+    run_peer(2, 5, "auto", 5, "dll1", 0, "-", "-", "-") -- picking Automatic again works the target out anew
+    loop()
+    s = run_peer(2, 5, "auto", 5, "dll1", 0, "-", "-", "-")
+    check(s:find("target auto BP_Rokuv3_C_0 (player) - Gustave key=player\n", 1, true), "the name stays in the window:\n" .. s)
+    check(scanCalls == scans0, "no world search for any of it: " .. (scanCalls - scans0))
+    -- switching it off again stops the reports
+    cfg.CharacterSwitchWatcher = false
+    run_peer(3, 4, "auto", 5, "dll1", 0, "-", "-", "-") -- Refresh (the file is only rewritten on a change)
+    loop()
+    s = run_peer(3, 4, "auto", 5, "dll1", 0, "-", "-", "-")
+    check(not s:find("\nswitch ", 1, true), "off again: nothing reported")
+    headgear._valid, maelleFace._valid = false, false
+    for _ = 1, 15 do loop() end
+end
+
+-- ... and the follower version of a party member (Expedition 33: BP_Pawn_AICompanion_Lune_C walks behind
+-- you while you play someone else) shares that party member's sliders: Lua finds it by the same face mesh
+-- and reports it ("party"); the DLL keeps the player (while playing them) and the follower on one set.
+if mode == "gon" then
+    cfg.CharacterSwitchWatcher = true
+    local function npc_face(name, compName, faceMesh, x)
+        local a = obj("BP_Pawn_AICompanion_" .. name .. "_C /Game/Maps/Lvl.Lvl:PersistentLevel.BP_Pawn_AICompanion_" .. name .. "_C_2147474943")
+        local b = comp("CharacterMesh0", a, bodyMesh, boneNames, boneParents, false)
+        local f = comp(compName, a, obj("SkeletalMesh /Game/Chars/" .. faceMesh .. "." .. faceMesh, { Skeleton = otherSkeleton }), { "root" }, { -1 }, false)
+        a.Mesh, a._loc = b, { X = x, Y = 0, Z = 0 }
+        allComps[#allComps + 1] = b
+        allComps[#allComps + 1] = f
+        notifies["/Script/Engine.Character"](a)
+        return a, string.format("%X", a._addr), b, f
+    end
+    -- the followers are loaded before the player is recognised as anyone
+    local sciel, scielKey = npc_face("Sciel", "Face", "Sciel_FaceMesh", 300)
+    local verso, versoKey = npc_face("Verso", "SkeletalMeshComponent_9", "Verso_FaceMesh", 400)
+    local monoco, monocoKey = npc_face("Monoco", "Face", "Monoco_FaceMesh", 500)
+    for _ = 1, 8 do loop() end
+    local scans0 = scanCalls
+    local remember = "BP_Pawn_AICompanion_Sciel_C@Sciel_FaceMesh,player@Verso_FaceMesh"
+    -- the player turns out to be Sciel (face), and a saved player@Verso file says Verso is a party member too
+    local playerFace = comp("Face", actor, obj("SkeletalMesh /Game/Chars/Sciel_FaceMesh.Sciel_FaceMesh", { Skeleton = otherSkeleton }), { "root" }, { -1 }, false)
+    allComps[#allComps + 1] = playerFace
+    run_peer(4, 4, "auto", 5, "dll1", 0, "-", "-", remember) -- Refresh
+    for _ = 1, 6 do loop() end
+    s = run_peer(4, 4, "auto", 5, "dll1", 0, "-", "-", remember)
+    check(s:find("\nswitch Sciel_FaceMesh\n", 1, true), "playing Sciel:\n" .. s)
+    check(s:find("\nparty " .. scielKey .. " Sciel_FaceMesh BP_Pawn_AICompanion_Sciel_C_2147474943\n", 1, true), "Sciel's follower linked to her:\n" .. s)
+    check(s:find("\nparty " .. versoKey .. " Verso_FaceMesh ", 1, true), "Verso's follower linked through his saved file:\n" .. s)
+    check(not s:find("\nparty " .. monocoKey, 1, true), "someone not in the party is left alone:\n" .. s)
+    check(not s:find("\nnpc " .. scielKey, 1, true), "the follower is not also a remembered NPC of its own:\n" .. s)
+    remember = remember .. ",Other" -- the remembered list changes: loaded characters are looked through again
+    run_peer(4, 4, "auto", 5, "dll1", 0, "-", "-", remember)
+    for _ = 1, 3 do loop() end
+    s = run_peer(4, 4, "auto", 5, "dll1", 0, "-", "-", remember)
+    check(not s:find("\nnpc " .. scielKey, 1, true) and s:find("\nparty " .. scielKey, 1, true), "... not even when looked through again:\n" .. s)
+    check(table.concat(printed, ""):find("BP_Pawn_AICompanion_Sciel_C_2147474943 is Sciel_FaceMesh (shares that party member's sliders)", 1, true), "logged")
+    -- the DLL gives the follower Sciel's sliders and lists it: its meshes are sculpted like any kept character
+    run_peer(4, 4, "auto", 5, "dll1", 0, "-", scielKey, remember)
+    for _ = 1, 3 do loop() end
+    s = run_peer(4, 4, "auto", 5, "dll1", 0, "-", scielKey, remember)
+    check(s:find("owner=BP_Pawn_AICompanion_Sciel_C_2147474943 [^\n]*actor=" .. scielKey .. "\n"), "follower sculpted:\n" .. s)
+    -- a follower that goes away is no longer reported
+    verso._valid = false
+    for _ = 1, 2 do loop() end
+    s = run_peer(4, 4, "auto", 5, "dll1", 0, "-", scielKey, remember)
+    check(not s:find("\nparty " .. versoKey, 1, true) and s:find("\nparty " .. scielKey, 1, true), "gone follower dropped:\n" .. s)
+    -- many characters arriving are looked at a few per tick, not all in one frame
+    local crowd = {}
+    for i = 1, 20 do
+        crowd[i] = obj("BP_NonPlayerCharacter_C /Game/Maps/Lvl.Lvl:PersistentLevel.Townsperson_" .. (600 + i))
+        notifies["/Script/Engine.Character"](crowd[i])
+    end
+    local function looked_at()
+        local n = 0
+        for _, a in ipairs(crowd) do if a._k2 > 0 then n = n + 1 end end
+        return n
+    end
+    for _ = 1, 5 do loop() end -- 2 s: they are due
+    check(looked_at() <= 8 * 1, "at most 8 a tick: " .. looked_at())
+    for _ = 1, 4 do loop() end
+    check(looked_at() == 20, "all looked at over a few ticks: " .. looked_at())
+    check(scanCalls == scans0, "no world search for any of it: " .. (scanCalls - scans0))
+    cfg.CharacterSwitchWatcher = false
+    for _, a in ipairs({ sciel, monoco }) do a._valid = false end
+    for _, a in ipairs(crowd) do a._valid = false end
+    playerFace._valid = false
+    for _, c in ipairs(allComps) do if c.GetOuter()._valid == false then c._valid = false end end
+    run_peer(5, 4, "auto", 5, "dll1", 0, "-", "-", "-")
+    for _ = 1, 15 do loop() end
+end
+
+-- party-member files (player@...) in the remembered list are not NPCs to look out for: a reload starts
+-- no lookout sweeps (each walks the object array) for them
+if mode == "gon" then
+    run_peer(5, 4, "auto", 5, "dll1", 0, "-", "-", "player@Lune_FaceMesh,player@Maelle_v2_FaceMesh")
+    loop()
+    local cs = charSearches
+    for _, c in ipairs(allComps) do if c.GetOuter() == actor then c._valid = false end end
+    actor._valid = false
+    actor = obj("BP_Rokuv3_C /Game/Maps/Lvl.Lvl:PersistentLevel.BP_Rokuv3_C_1")
+    body = comp("CharacterMesh0", actor, bodyMesh, boneNames, boneParents, true)
+    actor.Mesh, pc.Pawn = body, actor
+    allComps[#allComps + 1] = body
+    for _ = 1, 50 do loop() end -- 20 s: past the settle steps that would sweep
+    s = run_peer(5, 4, "auto", 5, "dll1", 0, "-", "-", "player@Lune_FaceMesh,player@Maelle_v2_FaceMesh")
+    check(s:find("owner=BP_Rokuv3_C_1 (player)", 1, true), "reloaded player picked up:\n" .. s)
+    check(charSearches == cs, "no character sweeps for party-member files: " .. (charSearches - cs))
 end
 
 -- DLL restarted (new session) must not replay old counters

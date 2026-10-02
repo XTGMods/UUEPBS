@@ -13,7 +13,7 @@
 -- those it only checks that the objects it already holds are still valid, and it only
 -- rewrites the bridge file when something actually changed.
 
-local VERSION = "2.6.2"
+local VERSION = "2.7.1"
 local TAG = "[UUEPBS] "
 local Config = require("config")
 
@@ -989,6 +989,16 @@ local RANGE = tonumber(Config.CharacterRange) or 5000 -- cm; 0 = any distance
 local remembered = {} -- identity -> true (from the DLL)
 local rememberedText = ""
 local sighted = {} -- actor key -> { actor, full, identity, label } remembered NPCs that are loaded
+-- Character Switch Watcher state (see that section further down)
+local Switch = {
+    who = nil, comp = nil, full = nil, mesh = nil, -- who is played, and the mesh that says so
+    party = {}, -- face mesh -> true: party members (played this session, or with a saved player@ file)
+    links = {}, -- actor key -> { actor, full, who, label }: NPCs that are a party member (followers)
+    faces = {}, -- actor full name -> face mesh (only found faces are cached: a character may be dressed later)
+    queue = {}, queued = {}, -- characters to look at, a few per tick
+}
+Switch.MAX_LINKS = 4 -- NPCs sharing one party member's sliders at most
+Switch.CHECKS_PER_TICK = 8
 local newCharacters = {} -- { obj, due } from NotifyOnNewObject, checked once they are set up
 local identityCache = {} -- actor full name -> identity (full names are unique among live objects; addresses get reused)
 local MAX_SAME = math.max(1, tonumber(Config.MaxSameIdentity) or 2)
@@ -1256,6 +1266,9 @@ local function check_character(actor)
     if default and same_object(actor, default) then
         return -- the player has its own session file
     end
+    if Switch.links[address_of(actor)] then
+        return -- a party member's follower (Character Switch Watcher): shares the party member's sliders
+    end
     local id = identity_of(actor)
     if not id or not remembered[id] then
         return
@@ -1324,6 +1337,145 @@ local function sweep_characters()
 end
 
 ---------------------------------------------------------------------------
+-- Character Switch Watcher (CharacterSwitchWatcher in config.lua, off by default)
+---------------------------------------------------------------------------
+-- Party games often keep one player pawn and swap its meshes when you switch characters (Clair
+-- Obscur: Expedition 33 - Lune, Maelle and Gustave all play as BP_jRPG_Character_World_C). The player's
+-- sliders would then follow the pawn to whoever is played next. With the watcher on, the played
+-- character is recognised by its face mesh (else its head mesh, else its main mesh) and reported to the
+-- DLL ("switch"), which gives every character its own sliders (saved as _characters\player@<face>.json).
+
+local function switch_on()
+    return Config.CharacterSwitchWatcher == true
+end
+
+-- The mesh that says who a character is: a face mesh first, then a head mesh (component or asset name;
+-- after a switch the component may have a made-up name like SkeletalMeshComponent_2147474444 while its
+-- asset is still Maelle_v2_FaceMesh). "face" first, so a Headgear piece doesn't win. Returns comp, asset name.
+function Switch.face_mesh_in(comps)
+    for _, word in ipairs({ "face", "head" }) do
+        for _, c in ipairs(comps) do
+            local m = mesh_asset(c)
+            if m then
+                local an = name_of(m)
+                if name_of(c):lower():find(word, 1, true) or an:lower():find(word, 1, true) then
+                    return c, an
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- Is this NPC a party member (the follower version of someone you play)? Then it shares their sliders.
+function Switch.check(actor)
+    if not alive(actor) or is_default_object(actor) then
+        return
+    end
+    local default = cheap_default()
+    if default and same_object(actor, default) then
+        return
+    end
+    local full = full_name(actor)
+    local key = full and address_of(actor)
+    if not key or Switch.links[key] then
+        return
+    end
+    local who = Switch.faces[full]
+    if not who then
+        local comps = {}
+        local skel = engine_class("/Script/Engine.SkeletalMeshComponent")
+        if skel then
+            pcall(function()
+                each_of(actor:K2_GetComponentsByClass(skel), function(c)
+                    if alive(c) then
+                        comps[#comps + 1] = c
+                    end
+                end)
+            end)
+        end
+        local _, an = Switch.face_mesh_in(comps)
+        who = an and safe_id(an) or nil
+        if who then
+            Switch.faces[full] = who
+        end
+    end
+    if not who or not Switch.party[who] then
+        return
+    end
+    local same = 0
+    for _, l in pairs(Switch.links) do
+        if l.who == who then
+            same = same + 1
+        end
+    end
+    if same >= Switch.MAX_LINKS then
+        return
+    end
+    local label = actor_label(actor, nil)
+    Switch.links[key] = { actor = actor, full = full, who = who, label = label }
+    sighted[key] = nil -- not a remembered NPC of its own: it shares the party member's sliders
+    knownActors[key] = knownActors[key] or { actor = actor, full = full, label = label }
+    stateDirty = true
+    say("Character Switch Watcher: %s is %s (shares that party member's sliders)", label, who)
+end
+
+function Switch.enqueue(obj, due)
+    local key = address_num(obj)
+    if key and not Switch.queued[key] then
+        Switch.queued[key] = true
+        Switch.queue[#Switch.queue + 1] = { obj = obj, due = due or 0 }
+    end
+end
+
+-- A party member became known (played, or a saved file): look through the characters already loaded.
+function Switch.add(who)
+    if Switch.party[who] then
+        return
+    end
+    Switch.party[who] = true
+    for _, e in ipairs(liveCharacters) do
+        Switch.enqueue(e.obj)
+    end
+    for _, c in ipairs(candidates) do
+        Switch.enqueue(c.actor)
+    end
+end
+
+-- Each tick: a few characters looked at, and followers that went away dropped.
+function Switch.tick(now)
+    if not switch_on() then
+        return
+    end
+    for key, l in pairs(Switch.links) do
+        if not still(l.actor, l.full) then
+            Switch.links[key] = nil
+            stateDirty = true
+        end
+    end
+    if next(Switch.party) == nil then
+        return
+    end
+    local done, keep = 0, {}
+    for _, q in ipairs(Switch.queue) do
+        if done < Switch.CHECKS_PER_TICK and now >= q.due then
+            done = done + 1
+            Switch.queued[address_num(q.obj) or 0] = nil
+            pcall(Switch.check, q.obj)
+        else
+            keep[#keep + 1] = q
+        end
+    end
+    Switch.queue = keep
+end
+
+-- "Lune_FaceMesh" -> "Lune" for the window (the identity itself keeps the full mesh name)
+local function switch_display(who)
+    local d = who:gsub("_?[Ff]ace_?[Mm]esh$", ""):gsub("_?[Ff]ace$", ""):gsub("_?[Hh]ead$", "")
+    return d ~= "" and d or who
+end
+
+---------------------------------------------------------------------------
 -- Scanning
 ---------------------------------------------------------------------------
 -- Every character is looked at on its own ("collected"), at most one per tick: an NPC walking into
@@ -1340,7 +1492,7 @@ end
 local scanCount = 0 -- sent to the DLL, so a re-collect always reaches it (re-tracks stale meshes)
 local rigsText = ""
 local rigsChanged = false -- the sculpted meshes changed: morph weights need applying again
-local make_plan, watch_characters, settle_due, process_queue, scan_status
+local make_plan, watch_characters, settle_due, process_queue, scan_status, note_switch
 do
     -- Games often finish assembling a character after it appears (outfit actors attached later,
     -- placeholder meshes swapped for the real ones), so a new character is checked again a few times
@@ -1697,6 +1849,41 @@ do
         end
     end
 
+    -- Character Switch Watcher: the mesh that says who the player character is. A face mesh first, then a
+    -- head mesh (component or asset name; after a switch the component may have a made-up name like
+    -- SkeletalMeshComponent_2147474444 while its asset is still Maelle_v2_FaceMesh), else the main mesh.
+    local function switch_mesh(e, built)
+        local fc, fa = Switch.face_mesh_in(e.comps)
+        if fc then
+            return fc, fa
+        end
+        for _, r in ipairs(built) do
+            if r.primary then
+                local m = mesh_asset(r.comp)
+                return r.comp, m and name_of(m) or nil
+            end
+        end
+        return nil
+    end
+
+    function note_switch(e, built)
+        local c, who = switch_mesh(e, built)
+        if not c or not who or who == "" or who == "?" or who == "None" then
+            return -- nothing to tell by (yet): keep the last one
+        end
+        who = safe_id(who)
+        Switch.comp, Switch.full, Switch.mesh = c, full_name(c), mesh_prop(c)
+        if who ~= Switch.who then
+            Switch.who = who
+            Switch.add(who)
+            say("Character Switch Watcher: playing as %s", who)
+            if targetInfo.key == PLAYER_KEY and target then
+                targetInfo.label = actor_label(target, player_pawn()) .. " - " .. switch_display(who)
+            end
+            stateDirty = true
+        end
+    end
+
     -- Builds a collected character from e.comps / e.attachedFrom (filled by either lookup).
     local function finish_collect(e, how, t0)
         local built, report = {}, {}
@@ -1722,6 +1909,9 @@ do
                 due[i] = now + d
             end
             settles[e.key] = { due = due, step = 0 }
+        end
+        if e.key == PLAYER_KEY and switch_on() then
+            note_switch(e, built)
         end
         log_report(e.key == PLAYER_KEY and "" or e.key, report, e.key ~= targetInfo.key)
         stats.collects = stats.collects + 1
@@ -1816,7 +2006,11 @@ do
         local entries = {}
         if actor then
             local key = (pickedId == nil or (default and same_object(actor, default))) and PLAYER_KEY or address_of(actor)
-            targetInfo = { id = pickedId or "auto", label = actor_label(actor, pawn), key = key,
+            local label = actor_label(actor, pawn)
+            if key == PLAYER_KEY and switch_on() and Switch.who then
+                label = label .. " - " .. switch_display(Switch.who)
+            end
+            targetInfo = { id = pickedId or "auto", label = label, key = key,
                 identity = (key ~= PLAYER_KEY and REMEMBER) and (identity_of(actor) or "") or "" }
             if key ~= PLAYER_KEY then
                 knownActors[key] = { actor = actor, full = full_name(actor), label = targetInfo.label }
@@ -2018,6 +2212,11 @@ do
         if target and not alive(target) then
             return true
         end
+        -- Character Switch Watcher: the mesh that says who is played went away or got another asset
+        if switch_on() and Switch.comp and chars[PLAYER_KEY] and (not still(Switch.comp, Switch.full) or mesh_prop(Switch.comp) ~= Switch.mesh) then
+            Switch.comp = nil
+            queue_key(PLAYER_KEY)
+        end
         -- A kept NPC walked into or out of range.
         if RANGE > 0 and next(keptInRange) ~= nil then
             local origin = player_origin()
@@ -2208,6 +2407,14 @@ local function build_state()
     for key, e in pairs(sighted) do
         add("npc\t" .. clean(key) .. "\t" .. clean(e.identity) .. "\t" .. clean(e.label))
     end
+    if switch_on() and Switch.who then
+        add("switch\t" .. clean(Switch.who))
+    end
+    if switch_on() then
+        for key, l in pairs(Switch.links) do
+            add("party\t" .. clean(key) .. "\t" .. clean(l.who) .. "\t" .. clean(l.label))
+        end
+    end
     for _, c in ipairs(candidates) do
         add("cand\t" .. c.id .. "\t" .. clean(c.label .. (c.dist or "")) .. "\t" .. clean(c.key or c.id))
     end
@@ -2345,7 +2552,12 @@ local function read_dll_state()
                 wanted[key][string.lower(a)] = { name = a, weight = w }
             end
         elseif kind == "remember" then
-            if a ~= "" then
+            -- (player@... are the Character Switch Watcher's party members, not NPCs to look out for)
+            if a:sub(1, 7) == "player@" then
+                if switch_on() and #a > 7 then
+                    Switch.add(a:sub(8))
+                end
+            elseif a ~= "" then
                 rememberList[#rememberList + 1] = a
             end
         elseif kind == "keep" then
@@ -2451,6 +2663,7 @@ local function tick()
             rememberedChanged = false
             sweep_characters()
         end
+        Switch.tick(now_ms())
         check_new_characters(now_ms())
         if wantCandidates then
             candidatesDue, candidatesFull = 0, true
@@ -2568,6 +2781,9 @@ end)
 pcall(function()
     NotifyOnNewObject("/Script/Engine.Character", function(obj)
         note_character(obj)
+        if switch_on() and next(Switch.party) ~= nil then
+            Switch.enqueue(obj, now_ms() + 2000) -- looked at once it is dressed
+        end
         if REMEMBER and next(remembered) ~= nil and #newCharacters < 512 then
             newCharacters[#newCharacters + 1] = { obj = obj, due = now_ms() + 2000 }
         end

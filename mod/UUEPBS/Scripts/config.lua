@@ -59,6 +59,15 @@ return {
     IdentityLinkSearch = true,
     -- NPCs are only sculpted while they are this close to the player, in cm (5000 = 50 m). 0 = any distance.
     CharacterRange = 5000,
+    -- Character Switch Watcher: for games where you switch between party members while the game keeps one
+    -- player character and swaps its looks (Clair Obscur: Expedition 33 and many other JRPGs). Without it,
+    -- the player's sliders stay on whoever you switch to. With it, each party member keeps their own
+    -- sliders: the mod recognises who you're playing by their face mesh (else head, else main mesh) and
+    -- swaps the sliders when that changes. Saved in <presets folder>\_characters\player@<face mesh>.json.
+    -- The follower version of a party member (Expedition 33: BP_Pawn_AICompanion_Lune_C walking behind you)
+    -- has the same face mesh and shares those sliders: edit Lune while playing her and her follower matches.
+    -- The first character it sees keeps the sliders you already had. Leave off for other games.
+    CharacterSwitchWatcher = false,
     -- At most this many loaded characters get the sliders of one remembered NPC at a time
     -- (two NPCs can only share a name or face by accident).
     MaxSameIdentity = 2,

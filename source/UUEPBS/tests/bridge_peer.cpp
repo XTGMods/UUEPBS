@@ -35,6 +35,8 @@ int main(int argc, char** argv)
             std::printf("\n");
         }
     }
+    if (!st->switch_who.empty()) std::printf("switch %s\n", st->switch_who.c_str());
+    for (auto& p : st->party) std::printf("party %s %s %s\n", p.key.c_str(), p.identity.c_str(), p.label.c_str());
     if (!st->animated_morphs.empty())
     {
         std::printf("manim");

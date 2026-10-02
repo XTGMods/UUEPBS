@@ -774,6 +774,166 @@ int main()
         reg.set_active_actor(kPlayerActor, "Coen", "auto");
         reg.forget_actor("B7", true);
         CHECK(!logged.empty());
+
+        // Character Switch Watcher: one pawn, several party members, each with its own sliders
+        reg.set_active_actor(kPlayerActor, "Hero", "auto");
+        reg.replace_edits(book_of({{"head", 1.3, 1.3, 1.3, Spread::Keep}})); // what _last_session restored
+        CHECK(mem.switch_player(reg, "Lune_FaceMesh", later(20)).find("keeps the sliders") != std::string::npos);
+        CHECK(reg.edits_of(kPlayerActor).count("head") && mem.player_slot() == "player@Lune_FaceMesh");
+        mem.persist(reg, later(20));
+        mem.persist(reg, later(22));
+        CHECK(fs::exists(dir / "player@Lune_FaceMesh.json")); // the first character takes over the session's sliders
+        reg.replace_edits(book_of({{"head", 1.5, 1.5, 1.5, Spread::Keep}})); // Lune's head made bigger
+        CHECK(mem.switch_player(reg, "Lune_FaceMesh", later(23)).empty()); // same character: nothing happens
+        // switch to Maelle: Lune saved at once (no debounce), Maelle starts without sliders
+        CHECK(mem.switch_player(reg, "Maelle_v2_FaceMesh", later(23)).find("no sliders yet") != std::string::npos);
+        CHECK(reg.edits_of(kPlayerActor).empty() && reg.morphs_of(kPlayerActor).empty());
+        {
+            EditBook b;
+            std::string msg;
+            PresetShelf shelf;
+            shelf.set_folder(dir);
+            CHECK(shelf.load("player@Lune_FaceMesh", b, msg) && b.count("head") && std::abs(b.at("head").edit.axis[0] - 1.5) < 1e-9);
+        }
+        reg.replace_edits(book_of({{"pelvis", 1.2, 1.2, 1.2, Spread::Keep}})); // Maelle's hips
+        reg.set_morph("BreastSize", 0.4);
+        // back to Lune: her head, not Maelle's hips
+        CHECK(mem.switch_player(reg, "Lune_FaceMesh", later(24)).find("its own sliders") != std::string::npos);
+        CHECK(reg.edits_of(kPlayerActor).count("head") && !reg.edits_of(kPlayerActor).count("pelvis") && reg.morphs_of(kPlayerActor).empty());
+        CHECK(fs::exists(dir / "player@Maelle_v2_FaceMesh.json"));
+        // next game session, the game starts on Maelle: hers come back, not the session's
+        {
+            CharacterMemory fresh;
+            fresh.set_folder(dir);
+            reg.replace_edits(book_of({{"head", 1.5, 1.5, 1.5, Spread::Keep}}));
+            CHECK(fresh.switch_player(reg, "Maelle_v2_FaceMesh", later(30)).find("its own sliders") != std::string::npos);
+            CHECK(reg.edits_of(kPlayerActor).count("pelvis") && !reg.edits_of(kPlayerActor).count("head") && reg.morphs_of(kPlayerActor).count("breastsize"));
+            // Reset all while playing Maelle forgets her slot
+            reg.clear_edits();
+            reg.clear_morphs();
+            fresh.persist(reg, later(31));
+            CHECK(!fs::exists(dir / "player@Maelle_v2_FaceMesh.json") && fs::exists(dir / "player@Lune_FaceMesh.json"));
+        }
+        // a game without the watcher never gets a player slot
+        {
+            CharacterMemory plain;
+            plain.set_folder(dir);
+            reg.replace_edits(book_of({{"neck_01", 1.1, 1.1, 1.1, Spread::Keep}}));
+            plain.persist(reg, later(40));
+            plain.persist(reg, later(42));
+            CHECK(plain.player_slot().empty() && plain.list() == std::vector<std::string>{"player@Lune_FaceMesh"});
+        }
+        reg.clear_edits();
+        reg.clear_morphs();
+
+        // ... and a party member's follower (Expedition 33: BP_Pawn_AICompanion_Lune_C) shares the
+        // party member's sliders: set the player's head to 3.0 while playing Lune and her follower has it too
+        {
+            const fs::path pdir = "/tmp/claude-uuepbs-test/party/_characters";
+            fs::remove_all(pdir);
+            CharacterMemory m;
+            m.set_folder(pdir);
+            auto head_of = [&](const std::string& key) {
+                const EditBook b = reg.edits_of(key);
+                return b.count("head") ? b.at("head").edit.axis[0] : 0.0;
+            };
+            reg.set_active_actor(kPlayerActor, "Hero", "auto");
+            reg.replace_edits(book_of({{"head", 3.0, 3.0, 3.0, Spread::Keep}}));
+            m.switch_player(reg, "Lune_FaceMesh", later(50));
+            // Lune's follower turns up, still carrying sliders from an NPC file of its own: the party member's win
+            reg.replace_edits_of("F1", book_of({{"pelvis", 1.4, 1.4, 1.4, Spread::Keep}}));
+            m.set_party_links({{"F1", "Lune_FaceMesh", "BP_Pawn_AICompanion_Lune_C_1"}});
+            m.sync_party(reg);
+            CHECK(head_of("F1") == 3.0 && !reg.edits_of("F1").count("pelvis"));
+            CHECK(!m.restore(reg, "F1", "BP_Pawn_AICompanion_Lune_C@Lune_FaceMesh", "follower")); // never from its own file
+            // edit the player while playing Lune: the follower follows
+            reg.replace_edits(book_of({{"head", 2.0, 2.0, 2.0, Spread::Keep}}));
+            m.sync_party(reg);
+            CHECK(head_of("F1") == 2.0);
+            // pick the follower in the window and edit it: the player (playing Lune) follows
+            reg.set_active_actor("F1", "Lune (follower)", "F1");
+            reg.replace_edits(book_of({{"head", 2.5, 2.5, 2.5, Spread::Keep}, {"neck_01", 1.2, 1.2, 1.2, Spread::Keep}}));
+            reg.set_morph("BreastSize", 0.6);
+            m.sync_party(reg);
+            CHECK(head_of(kPlayerActor) == 2.5 && reg.edits_of(kPlayerActor).count("neck_01") && reg.morphs_of(kPlayerActor).count("breastsize"));
+            reg.set_active_actor(kPlayerActor, "Hero", "auto");
+            // switch to Maelle: the player starts without sliders, Lune's follower keeps Lune's
+            m.switch_player(reg, "Maelle_v2_FaceMesh", later(51));
+            CHECK(reg.edits_of(kPlayerActor).empty() && head_of("F1") == 2.5);
+            // Maelle's hips don't go to Lune's follower
+            reg.replace_edits(book_of({{"pelvis", 1.1, 1.1, 1.1, Spread::Keep}}));
+            m.sync_party(reg);
+            CHECK(!reg.edits_of("F1").count("pelvis") && head_of("F1") == 2.5);
+            // edit Lune's follower while playing Maelle: Lune's sliders are saved, Maelle untouched
+            reg.set_active_actor("F1", "Lune (follower)", "F1");
+            reg.replace_edits(book_of({{"head", 3.5, 3.5, 3.5, Spread::Keep}}));
+            m.sync_party(reg);
+            m.persist(reg, later(52));
+            m.persist(reg, later(54));
+            {
+                EditBook b;
+                std::string msg;
+                PresetShelf shelf;
+                shelf.set_folder(pdir);
+                CHECK(shelf.load("player@Lune_FaceMesh", b, msg) && b.count("head") && b.at("head").edit.axis[0] == 3.5);
+            }
+            CHECK(head_of(kPlayerActor) == 0.0 && reg.edits_of(kPlayerActor).count("pelvis"));
+            reg.set_active_actor(kPlayerActor, "Hero", "auto");
+            // back to Lune: the follower's edit is hers now
+            m.switch_player(reg, "Lune_FaceMesh", later(55));
+            CHECK(head_of(kPlayerActor) == 3.5);
+            // a follower of a party member without sliders yet gives its own (Gustave, never played)
+            reg.replace_edits_of("F3", book_of({{"spine_01", 1.3, 1.3, 1.3, Spread::Keep}}));
+            m.set_party_links({{"F1", "Lune_FaceMesh", "Lune"}, {"F3", "Gustave_FaceMesh", "Gustave"}});
+            m.sync_party(reg);
+            CHECK(reg.edits_of("F3").count("spine_01"));
+            m.persist(reg, later(56));
+            m.persist(reg, later(58));
+            CHECK(fs::exists(pdir / "player@Gustave_FaceMesh.json"));
+            // the follower despawns; a new one later gets Lune's sliders again
+            m.set_party_links({{"F3", "Gustave_FaceMesh", "Gustave"}});
+            m.sync_party(reg);
+            reg.forget_actor("F1", false);
+            reg.replace_edits_of("F5", book_of({{"pelvis", 1.9, 1.9, 1.9, Spread::Keep}}));
+            m.set_party_links({{"F3", "Gustave_FaceMesh", "Gustave"}, {"F5", "Lune_FaceMesh", "Lune"}});
+            m.sync_party(reg);
+            CHECK(head_of("F5") == 3.5 && !reg.edits_of("F5").count("pelvis"));
+            // the follower goes, and a new character gets its address and comes with sliders of its own:
+            // linked again, it gets the member's sliders (not taken for an edit)
+            m.set_party_links({{"F3", "Gustave_FaceMesh", "Gustave"}});
+            m.sync_party(reg);
+            reg.replace_edits_of("F5", book_of({{"pelvis", 1.7, 1.7, 1.7, Spread::Keep}}));
+            m.set_party_links({{"F3", "Gustave_FaceMesh", "Gustave"}, {"F5", "Lune_FaceMesh", "Lune"}});
+            m.sync_party(reg);
+            CHECK(head_of("F5") == 3.5 && !reg.edits_of("F5").count("pelvis") && !reg.edits_of(kPlayerActor).count("pelvis"));
+            // both changed before a sync: the one picked in the window wins
+            reg.set_active_actor("F5", "Lune (follower)", "F5");
+            reg.replace_edits_of(kPlayerActor, book_of({{"head", 1.1, 1.1, 1.1, Spread::Keep}}));
+            reg.replace_edits(book_of({{"head", 1.7, 1.7, 1.7, Spread::Keep}}));
+            m.sync_party(reg);
+            CHECK(head_of(kPlayerActor) == 1.7 && head_of("F5") == 1.7);
+            reg.set_active_actor(kPlayerActor, "Hero", "auto");
+            // nothing changed: the sync doesn't even compare (it runs every 30 ms)
+            m.sync_party(reg);
+            const uint64_t rev = reg.edit_revision();
+            const size_t syncs = m.party_syncs();
+            m.sync_party(reg);
+            CHECK(reg.edit_revision() == rev && m.party_syncs() == syncs);
+            // a follower is never restored from an NPC file of its own (it would overwrite the member's sliders)
+            {
+                PresetShelf shelf;
+                shelf.set_folder(pdir);
+                std::string msg;
+                shelf.save("BP_Pawn_AICompanion_Esme_C@Esme_FaceMesh", book_of({{"pelvis", 2.0, 2.0, 2.0, Spread::Keep}}), msg);
+                m.set_party_links({{"F3", "Gustave_FaceMesh", "Gustave"}, {"F5", "Lune_FaceMesh", "Lune"}, {"F7", "Esme_FaceMesh", "Esme"}});
+                m.sync_party(reg);
+                CHECK(!m.restore(reg, "F7", "BP_Pawn_AICompanion_Esme_C@Esme_FaceMesh", "Esme (follower)") && reg.edits_of("F7").empty());
+            }
+            reg.forget_actor("F3", false);
+            reg.forget_actor("F5", false);
+            reg.clear_edits();
+            reg.clear_morphs();
+        }
     }
 
     // Cost of the pose hook callback (it runs for every skeletal mesh in the game, every frame).

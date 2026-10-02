@@ -102,6 +102,8 @@ namespace uuepbs::bridge
         std::vector<std::string> animated_morphs; // "manim": morphs the game keeps overwriting
         std::vector<std::string> gone;            // kept characters that no longer exist
         std::vector<NpcSighting> npcs;            // remembered characters Lua found
+        std::string switch_who;                   // Character Switch Watcher: who the player character is (its face mesh)
+        std::vector<NpcSighting> party;           // ... and NPCs that are a party member (key, who = face mesh, label)
 
         std::string setting(const std::string& key, const std::string& fallback = {}) const
         {

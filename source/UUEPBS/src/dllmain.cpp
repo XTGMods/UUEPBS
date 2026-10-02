@@ -42,7 +42,7 @@ namespace
     namespace fs = std::filesystem;
     using Clock = std::chrono::steady_clock;
 
-    constexpr const char* kVersion = "v2.6.1";
+    constexpr const char* kVersion = "v2.6.2";
 
     fs::path module_folder()
     {
@@ -211,6 +211,13 @@ namespace
         {
             std::lock_guard guard(m_lock);
             ++m_out.refresh;
+            m_out_dirty = true;
+        }
+
+        void relist_targets() override
+        {
+            std::lock_guard guard(m_lock);
+            ++m_out.relist;
             m_out_dirty = true;
         }
 

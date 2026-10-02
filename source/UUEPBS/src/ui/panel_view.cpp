@@ -144,7 +144,10 @@ namespace uuepbs::ui
         }
         if (m_targets && now - m_target_time > std::chrono::milliseconds(400))
         {
-            m_target_list = m_targets->targets();
+            if (!m_target_combo_open || now - m_target_combo_since < std::chrono::milliseconds(2500))
+            {
+                m_target_list = m_targets->targets();
+            }
             m_target = m_targets->current_target();
             m_target_time = now;
         }
@@ -492,7 +495,15 @@ namespace uuepbs::ui
         const float refresh_w = sk.button_width("Refresh", "refresh");
         ImGui::SetNextItemWidth(std::max(120.0f, ImGui::GetContentRegionAvail().x - refresh_w - ImGui::GetStyle().ItemSpacing.x));
         const std::string shown = m_target.label.empty() ? std::string("(searching...)") : m_target.label;
-        if (ImGui::BeginCombo("##target", shown.c_str(), ImGuiComboFlags_HeightLarge))
+        const bool was_open = m_target_combo_open;
+        m_target_combo_open = ImGui::BeginCombo("##target", shown.c_str(), ImGuiComboFlags_HeightLarge);
+        if (m_target_combo_open && !was_open)
+        {
+            // Just opened: ask for the list sorted by the current distances (cheap; Refresh searches the world).
+            m_target_combo_since = Clock::now();
+            m_targets->relist_targets();
+        }
+        if (m_target_combo_open)
         {
             const std::string auto_label = std::string("Automatic (player / game default)") + (is_edited(kPlayerActor) ? "   - edited" : "");
             if (ImGui::Selectable(auto_label.c_str(), m_target.id == "auto"))
@@ -526,11 +537,8 @@ namespace uuepbs::ui
             }
             ImGui::EndCombo();
         }
-        if (ImGui::IsItemClicked())
-        {
-            m_targets->refresh_targets();
-        }
-        tooltip("Whose body the sliders edit. The list shows characters currently loaded in the level.\n"
+        tooltip("Whose body the sliders edit. The list shows characters currently loaded in the level, nearest first,\n"
+                "with their distance from the player. Characters you have edited are always listed.\n"
                 "Characters you have edited keep their sliders while you edit someone else (marked \"edited\").\n"
                 "Characters you never edited are left alone.");
         ImGui::SameLine();

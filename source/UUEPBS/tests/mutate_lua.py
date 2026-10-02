@@ -69,6 +69,21 @@ M = [
      "local first = (brief and not Config.Verbose) and #report or 1", "local first = 1"),
     ("2.6.1: unloaded meshes not summarised",
      "        if #built == 0 and #e.comps > 0 and chars[e.key]", "        if false and chars[e.key]"),
+    ("2.6.2: no distances in the list",
+     "parts[#parts + 1] = c.id .. \"\\t\" .. c.label .. c.dist .. \"\\t\" .. c.key", "parts[#parts + 1] = c.id .. \"\\t\" .. c.label .. \"\\t\" .. c.key"),
+    ("2.6.2: edited characters capped like the rest",
+     "        if not edited then\n            plain = plain + 1\n        end\n        if edited or plain <= cap then",
+     "        plain = plain + 1\n        if plain <= cap then"),
+    ("2.6.2: kept characters not added to the list",
+     "        if k and alive(k.actor) and full_name(k.actor) == k.full then\n            add(k.actor)",
+     "        if false then\n            add(k.actor)"),
+    ("2.6.2: relist request ignored",
+     "            if seen.relist >= 0 and n ~= seen.relist then\n                pendingRelist = true",
+     "            if false then\n                pendingRelist = true"),
+    ("2.6.2: opening the window always walks the object array",
+     "        if liveStale or not USE_LIVE_LIST then", "        if true then"),
+    ("2.6.2: a reload doesn't mark the list stale",
+     "                liveStale = true -- a reload", "                local _ = true -- a reload"),
 ]
 
 bad = 0

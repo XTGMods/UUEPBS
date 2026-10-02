@@ -230,9 +230,9 @@ local printed = {}
 local realPrint = print
 print = function(s) printed[#printed + 1] = s end
 
-local function run_peer(rescan, pick, pickId, refresh, session, ui, morphs, keep, remember)
+local function run_peer(rescan, pick, pickId, refresh, session, ui, morphs, keep, remember, relist)
     local report = work .. "/peer_report.txt"
-    os.execute(string.format('%s %s/native %d %d %s %d %s %d "%s" "%s" "%s" > %s', peer, work, rescan, pick, pickId, refresh, session or "dll1", ui or 0, morphs or "-", keep or "-", remember or "-", report))
+    os.execute(string.format('%s %s/native %d %d %s %d %s %d "%s" "%s" "%s" %d > %s', peer, work, rescan, pick, pickId, refresh, session or "dll1", ui or 0, morphs or "-", keep or "-", remember or "-", relist or 0, report))
     local h = realOpen(report, "rb")
     local out = h:read("a")
     h:close()
@@ -382,11 +382,25 @@ check(searches == searchesBefore, "no FindAllOf while idle: " .. (searches - sea
 check(drvBody0._vis == visBefore and drvActor._k2 == k2Before, "no lookups on the character while idle")
 check(read(work .. "/native/bridge_in.txt") == inBefore, "bridge file not rewritten while idle")
 
--- window open: the picker list is refreshed (and kept fresh) only then
+-- window open: the picker list is re-sorted by the current distances (and kept fresh) only then. The object
+-- array was walked once at start, so opening the window doesn't walk it again - except after the player
+-- character changed (generic: the menu pawn was replaced), when it is walked once more.
+local other, otherName = (mode == "gon") and npc or actor, (mode == "gon") and "BP_Guard_C_3" or "BP_Rokuv3_C_0"
+other._loc = { X = 1234, Y = 0, Z = 0 }
 run_peer(0, 0, "none", 0, "dll1", 1)
 searchesBefore = searches
 loop()
-check(searches > searchesBefore, "character list refreshed when the window opens")
+s = run_peer(0, 0, "none", 0, "dll1", 1)
+check(s:find("cand " .. otherName .. "   12 m key=", 1, true), "list re-sorted with distances when the window opens:\n" .. s)
+check(searches == searchesBefore, "opening the window walks no object array: " .. (searches - searchesBefore))
+-- opening the character list asks for a re-sort (relist): current distances, no object search
+other._loc = { X = 2049, Y = 0, Z = 0 }
+searchesBefore = searches
+run_peer(0, 0, "none", 0, "dll1", 1, "-", "-", "-", 1)
+loop()
+s = run_peer(0, 0, "none", 0, "dll1", 1, "-", "-", "-", 1)
+check(s:find("cand " .. otherName .. "   20 m key=", 1, true) and searches == searchesBefore, "list re-sorted when opened, no search:\n" .. s)
+other._loc = { X = 0, Y = 0, Z = 0 }
 settle()
 run_peer(0, 0, "none", 0, "dll1", 0)
 for _ = 1, 20 do loop() end
@@ -476,6 +490,19 @@ if mode == "gon" then
     for _ = 1, 12 do loop() end
     s = run_peer(1, 2, "auto", 0)
     check(s:find("CharacterMesh0 primary=1 owner=BP_Rokuv3_C_0 %(player%)") and not s:find(" Gauntlets ", 1, true), "new character scanned, gloves not there yet:\n" .. s)
+    -- after a reload the first listing walks the object array once (characters loaded with the level)
+    local reloadSearches = searches
+    run_peer(1, 2, "auto", 0, "dll1", 1)
+    loop()
+    check(searches > reloadSearches, "after a reload, opening the window walks the object array once")
+    run_peer(1, 2, "auto", 0, "dll1", 0)
+    loop()
+    reloadSearches = searches
+    run_peer(1, 2, "auto", 0, "dll1", 1)
+    loop()
+    check(searches == reloadSearches, "and the next time not: " .. (searches - reloadSearches))
+    run_peer(1, 2, "auto", 0, "dll1", 0)
+    loop()
     -- the game attaches the outfit piece five seconds later; nothing else changes
     for _ = 1, 4 do loop() end
     gloves = comp("Gauntlets", actor, shirtMesh, boneNames, boneParents, true)
@@ -686,7 +713,7 @@ if mode == "gon" then
     loop()
     loop()
     s = run_peer(1, 6, "auto", 0, "dll1", 1, "-", anca2Key, rememberGuards .. ",Other")
-    check(s:find("cand [^\n]*Gatekeeper_church2_2147465868  = Gatekeeper_church2_277 key=", 1) ~= nil, "picker shows the identity:\n" .. s)
+    check(s:find("cand [^\n]*Gatekeeper_church2_2147465868  = Gatekeeper_church2_277   5 m key=", 1) ~= nil, "picker shows the identity and distance:\n" .. s)
     local c1 = s:find("cand ", 1, true)
     check(c1 and s:find("^cand [^\n]*%(player%)", c1), "player listed first:\n" .. s)
     local p868, p840 = s:find("Gatekeeper_church2_2147465868", 1, true), s:find("Gatekeeper_church2_2147465840", 1, true)
@@ -896,7 +923,7 @@ end
 if mode == "gon" then
     local guardKey = guardId
     s = run_peer(1, 2, "auto", 0)
-    check(s:find("cand BP_Rokuv3_C_0 (player) key=player\n", 1, true) and s:find("cand BP_Guard_C_3 key=" .. guardKey .. "\n", 1, true),
+    check(s:find("cand BP_Rokuv3_C_0 (player) key=player\n", 1, true) and s:find("cand BP_Guard_C_3   0 m key=" .. guardKey .. "\n", 1, true),
         "candidates carry actor keys:\n" .. s)
     -- the player has edits, the guard is picked: both are scanned, each under its own key
     run_peer(1, 3, guardId, 0, "dll1", 0, "-", "player")
@@ -931,6 +958,32 @@ if mode == "gon" then
     local searchesKept = searches
     for _ = 1, 30 do loop() end
     check(searches == searchesKept, "no object searches while an NPC is kept: " .. (searches - searchesKept))
+    -- a character with sliders is always in the list, even past the MaxCandidates cap and far away
+    cfg.MaxCandidates = 1
+    npc._loc = { X = 30000, Y = 0, Z = 0 }
+    run_peer(1, 4, "auto", 1, "dll1", 0, "-", guardKey) -- Refresh
+    loop()
+    s = run_peer(1, 4, "auto", 1, "dll1", 0, "-", guardKey)
+    check(s:find("candidates 2\n", 1, true) and s:find("cand BP_Guard_C_3   300 m key=" .. guardKey .. "\n", 1, true), "edited NPC listed past the cap:\n" .. s)
+    -- and one the class lists don't return (a missed spawn notification, a class outside CandidateClasses)
+    local far = obj("BP_NonPlayerCharacter_C /Game/Maps/Lvl.Lvl:PersistentLevel.Far_7")
+    far._loc = { X = 1000, Y = 0, Z = 0 }
+    extraChars = { far }
+    local farKey = string.format("%X", far._addr)
+    run_peer(1, 4, "auto", 2, "dll1", 0, "-", guardKey .. "," .. farKey) -- Refresh lists it; the DLL keeps it
+    for _ = 1, 3 do loop() end
+    extraChars = {}
+    run_peer(1, 4, "auto", 3, "dll1", 0, "-", guardKey .. "," .. farKey) -- Refresh: the class list no longer has it
+    for _ = 1, 2 do loop() end
+    s = run_peer(1, 4, "auto", 3, "dll1", 0, "-", guardKey .. "," .. farKey)
+    check(s:find("cand Far_7   10 m key=" .. farKey .. "\n", 1, true), "edited character listed even when the class lists miss it:\n" .. s)
+    far._valid = false
+    run_peer(1, 4, "auto", 3, "dll1", 0, "-", guardKey)
+    for _ = 1, 3 do loop() end
+    cfg.MaxCandidates = 40
+    npc._loc = { X = 0, Y = 0, Z = 0 }
+    run_peer(1, 4, "auto", 0, "dll1", 0, "-", guardKey)
+    for _ = 1, 12 do loop() end
     -- a kept character that despawns is reported gone, and the report stops once the DLL drops it
     npc._valid, guardBody._valid = false, false
     for _ = 1, 12 do loop() end

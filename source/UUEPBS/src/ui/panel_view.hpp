@@ -54,7 +54,8 @@ namespace uuepbs::ui
         virtual std::vector<TargetChoice> targets() = 0;
         virtual TargetChoice current_target() = 0;
         virtual void pick_target(const std::string& id) = 0; // "auto" = back to the default
-        virtual void refresh_targets() = 0;
+        virtual void refresh_targets() = 0;                    // relist after searching the whole world (Refresh)
+        virtual void relist_targets() { refresh_targets(); }   // re-sort what is already known (opening the list)
         virtual void request_rescan() = 0;
         virtual std::string link_text() = 0;   // state of the Lua link, for the Status tab
         virtual std::string hotkey_text() = 0; // e.g. "F6"
@@ -128,6 +129,10 @@ namespace uuepbs::ui
         std::vector<TargetChoice> m_target_list{};
         TargetChoice m_target{};
         Clock::time_point m_target_time{};
+        // While the character list is open it takes the fresh nearest-first order that opening it asked for,
+        // then stays put, so entries don't move under the mouse.
+        bool m_target_combo_open{false};
+        Clock::time_point m_target_combo_since{};
         BodyMap m_body{};
         uint64_t m_body_revision{0};
         std::string m_body_status{};

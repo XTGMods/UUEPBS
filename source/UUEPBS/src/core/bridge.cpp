@@ -275,6 +275,7 @@ namespace uuepbs::bridge
         out += "rescan\t" + std::to_string(s.rescan) + "\n";
         out += "pick\t" + std::to_string(s.pick) + "\t" + clean_field(s.pick_id) + "\n";
         out += "refresh\t" + std::to_string(s.refresh) + "\n";
+        out += "relist\t" + std::to_string(s.relist) + "\n";
         out += "hook\t" + clean_field(s.hook_state) + "\t" + clean_field(s.hook_text) + "\n";
         out += std::string("ui\t") + (s.window_open ? "1" : "0") + "\n";
         for (const Reply& r : s.replies)

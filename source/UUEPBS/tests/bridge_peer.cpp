@@ -1,5 +1,5 @@
 // Stand-in for the DLL's side of the file bridge, built from the real protocol code.
-//   bridge_peer <dir> <rescan> <pick> <pick_id> <refresh> [dll_session] [window open 0/1] [morphs "A=0.5,B=1@key" or -] [keep "key,key" or -] [remember "id,id" or -]
+//   bridge_peer <dir> <rescan> <pick> <pick_id> <refresh> [dll_session] [window open 0/1] [morphs "A=0.5,B=1@key" or -] [keep "key,key" or -] [remember "id,id" or -] [relist]
 // Reads <dir>/bridge_in.txt, prints what it understood, answers every command and
 // writes <dir>/bridge_out.txt.
 #include "core/bridge.hpp"
@@ -46,6 +46,7 @@ int main(int argc, char** argv)
     out.lua_session = st->session;
     out.rescan = std::stoull(argv[2]); out.pick = std::stoull(argv[3]); out.pick_id = argv[4]; out.refresh = std::stoull(argv[5]);
     out.window_open = argc > 7 && std::string(argv[7]) == "1";
+    out.relist = argc > 11 ? std::stoull(argv[11]) : 0;
     out.hook_state = "live"; out.hook_text = "pose hook live on vtable 0x77ED320 slot 374";
     if (argc > 8 && std::string(argv[8]) != "-")
     {

@@ -13,7 +13,7 @@
 -- those it only checks that the objects it already holds are still valid, and it only
 -- rewrites the bridge file when something actually changed.
 
-local VERSION = "2.6.1"
+local VERSION = "2.6.2"
 local TAG = "[UUEPBS] "
 local Config = require("config")
 
@@ -794,6 +794,9 @@ local late = {}
 -- enough in big games to be felt). The full search runs when the window opens and on Refresh.
 local liveCharacters = {} -- { obj, full }
 local liveCharactersSeen = false
+-- The live list may have missed characters loaded with a level, so the first listing after a start or a
+-- reload walks the object array; later ones (opening the window or the list) only re-sort what is known.
+local liveStale = true
 local USE_LIVE_LIST = #(Config.CandidateClasses or {}) == 1 and (Config.CandidateClasses or {})[1] == "Character"
 
 local function note_character(obj)
@@ -859,6 +862,16 @@ local function refresh_candidates(full)
         end
         liveCharacters = keep
     end
+    -- characters with sliders, even if the lists above missed them
+    for key in pairs(keptSet) do
+        local k = knownActors[key]
+        if k and alive(k.actor) and full_name(k.actor) == k.full then
+            add(k.actor)
+        end
+    end
+    if full and USE_LIVE_LIST then
+        liveStale = false
+    end
     -- nearest first (the list is capped)
     local origin = pawn and alive(pawn) and late.location and late.location(pawn) or nil
     local entries = {}
@@ -880,27 +893,34 @@ local function refresh_candidates(full)
         end
         return x.n < y.n
     end)
-    local list = {}
+    -- Capped at MaxCandidates, but characters with sliders (kept) are always listed, wherever they are.
+    local list, plain = {}, 0
+    local cap = Config.MaxCandidates or 40
     local default = cheap_default()
-    for i, e in ipairs(entries) do
-        if i > (Config.MaxCandidates or 40) then
-            break
+    for _, e in ipairs(entries) do
+        local key = key_of(e.actor, default)
+        local edited = keptSet[key] ~= nil
+        if not edited then
+            plain = plain + 1
         end
-        local label = actor_label(e.actor, pawn)
+        if edited or plain <= cap then
+            local label = actor_label(e.actor, pawn)
         -- show who a character is recognised as when that differs from its object name
-        if late.identity and not (default and same_object(e.actor, default)) then
-            local ok, ident = pcall(late.identity, e.actor)
-            if ok and ident and ident ~= name_of(e.actor) and not ident:find("@", 1, true) then
-                label = label .. "  = " .. ident
+            if late.identity and not (default and same_object(e.actor, default)) then
+                local ok, ident = pcall(late.identity, e.actor)
+                if ok and ident and ident ~= name_of(e.actor) and not ident:find("@", 1, true) then
+                    label = label .. "  = " .. ident
+                end
             end
+            -- distance from the player, whole metres (only in the list; the label stays a name)
+            local dist = (e.d >= 0 and e.d < math.huge) and string.format("   %d m", math.floor(math.sqrt(e.d) / 100 + 0.5)) or ""
+            list[#list + 1] = { id = address_of(e.actor), label = label, actor = e.actor, key = key, dist = dist }
         end
-        list[#list + 1] = { id = address_of(e.actor), label = label, actor = e.actor }
     end
     candidates = list
     local parts = {}
     for _, c in ipairs(list) do
-        c.key = key_of(c.actor, default)
-        parts[#parts + 1] = c.id .. "\t" .. c.label .. "\t" .. c.key
+        parts[#parts + 1] = c.id .. "\t" .. c.label .. c.dist .. "\t" .. c.key
     end
     local text = table.concat(parts, "\n")
     if text ~= candidatesText then
@@ -1692,6 +1712,9 @@ do
         -- is checked again a few times while the game finishes it.
         local who = tostring(e.addr) .. "|" .. tostring(e.full)
         if seenActor[e.key] ~= who then
+            if e.key == PLAYER_KEY and seenActor[e.key] ~= nil then
+                liveStale = true -- a reload: the next listing walks the object array once
+            end
             seenActor[e.key] = who
             local now = os.clock() * 1000.0
             local due = {}
@@ -2186,7 +2209,7 @@ local function build_state()
         add("npc\t" .. clean(key) .. "\t" .. clean(e.identity) .. "\t" .. clean(e.label))
     end
     for _, c in ipairs(candidates) do
-        add("cand\t" .. c.id .. "\t" .. clean(c.label) .. "\t" .. clean(c.key or c.id))
+        add("cand\t" .. c.id .. "\t" .. clean(c.label .. (c.dist or "")) .. "\t" .. clean(c.key or c.id))
     end
     for key in pairs(goneKeys) do
         add("gone\t" .. clean(key))
@@ -2222,11 +2245,12 @@ local function write_state()
     stateDirty = false
 end
 
-local seen = { rescan = 0, pick = 0, refresh = 0, session = nil }
+local seen = { rescan = 0, pick = 0, refresh = 0, relist = 0, session = nil }
 local hookState, hookText = "waiting", ""
 local windowOpen = false
 local lastDllText = nil
 local pendingScan, pendingCandidates = false, false -- noticed by the fast morph loop, handled by tick()
+local pendingRelist = false -- re-sort the character list from what is known (opening the window or the list)
 local pendingFull = false -- the DLL asked for a rescan (Refresh, F7, a stale mesh): collect everyone again
 local rememberedChanged = false
 
@@ -2251,7 +2275,7 @@ local function read_dll_state()
     if dllSession ~= seen.session then
         -- New DLL session: take its counters as the baseline.
         seen.session = dllSession
-        seen.rescan, seen.pick, seen.refresh = -1, -1, -1
+        seen.rescan, seen.pick, seen.refresh, seen.relist = -1, -1, -1, -1
     end
     local mine = false -- ack/replies are only ours once the DLL has seen this script's session
     local open = false
@@ -2291,6 +2315,12 @@ local function read_dll_state()
                 wantCandidates = true
             end
             seen.refresh = n
+        elseif kind == "relist" then
+            local n = tonumber(a) or 0
+            if seen.relist >= 0 and n ~= seen.relist then
+                pendingRelist = true
+            end
+            seen.relist = n
         elseif kind == "ui" then
             open = a == "1"
         elseif kind == "hook" then
@@ -2336,7 +2366,12 @@ local function read_dll_state()
         end
     end
     if open and not windowOpen then
-        wantCandidates = true -- the picker is about to be looked at
+        -- the picker is about to be looked at: sorted by the current distances
+        if liveStale or not USE_LIVE_LIST then
+            wantCandidates = true
+        else
+            pendingRelist = true
+        end
     end
     windowOpen = open
     if sawMorphs then
@@ -2419,7 +2454,10 @@ local function tick()
         check_new_characters(now_ms())
         if wantCandidates then
             candidatesDue, candidatesFull = 0, true
+        elseif pendingRelist then
+            candidatesDue = 0
         end
+        pendingRelist = false
         if wantScan then
             schedule_scan(0, pendingFull)
             pendingFull = false
@@ -2503,6 +2541,7 @@ end
 
 local function world_changed()
     cachedController = nil
+    liveStale = true
     schedule_scan(1000, true)
     candidatesDue, candidatesFull = 0, true
 end

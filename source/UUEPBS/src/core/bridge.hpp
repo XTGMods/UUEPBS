@@ -128,6 +128,7 @@ namespace uuepbs::bridge
         uint64_t pick{};
         std::string pick_id;
         uint64_t refresh{};
+        uint64_t relist{}; // re-sort the character list from what Lua already knows (no object search)
         std::string hook_state{"waiting"};
         std::string hook_text;
         bool window_open{};

@@ -25,6 +25,7 @@ for line in io.lines("roku_ref.txt") do
 end
 
 extraChars = {} -- more characters FindAllOf("Character") returns
+fighters = {} -- polaris (TEKKEN 8): the fighters, PolarisCharacterActor (not Characters)
 badClassCalls = 0
 local function FNameObj(s) return { ToString = function() return s end, _s = s } end
 local nextAddr = 0x7FF600001000
@@ -136,6 +137,12 @@ local skippedLookups = 0
 if mode == "nodir" then npc.K2_GetComponentsByClass = function() return { ForEach = function() end } end end
 if mode == "legacy" then npc.K2_GetComponentsByClass = function() skippedLookups = skippedLookups + 1; error("should not be called") end end
 local pc = obj("BP_PlayerController_C /Game/Maps/Lvl.Lvl:PersistentLevel.BP_PlayerController_C_0", { Pawn = (mode == "gon") and actor or npc })
+-- polaris / nobody: the pawn you control is a camera or controller pawn without a body (TEKKEN 8: PolarisPawn)
+local cameraPawn
+if mode == "polaris" or mode == "nobody" or mode == "tekkenedit" or mode == "tekkenjson" then
+    cameraPawn = obj("PolarisPawn /Game/Maps/Battle.Battle:PersistentLevel.PolarisPawn_2147482435")
+    pc.Pawn = cameraPawn
+end
 
 -- mocked UE4SS globals
 UnrealVersion = { GetMajor = function() return 5 end, GetMinor = function() return 7 end }
@@ -178,9 +185,16 @@ function FindAllOf(name)
         return l
     end
     if name == "SkeletalMeshComponent" then scanCalls = scanCalls + 1; return allComps end
+    if name == "PolarisCharacterActor" then
+        local l = {}
+        for _, f in ipairs(fighters) do if f._valid then l[#l + 1] = f end end
+        return l
+    end
 end
 
-local project = mode == "gon" and "D:\\Steam Games\\steamapps\\common\\GON God Of Nothing\\Roku3" or "C:\\Games\\Some Game\\SomeGame"
+local project = mode == "gon" and "D:\\Steam Games\\steamapps\\common\\GON God Of Nothing\\Roku3"
+    or (mode == "polaris" or mode == "tekkenedit" or mode == "tekkenjson") and "C:\\Program Files (x86)\\Steam\\steamapps\\common\\TEKKEN 8\\Polaris"
+    or "C:\\Games\\Some Game\\SomeGame"
 local scriptPath = project .. "\\Binaries\\Win64\\ue4ss\\Mods\\UUEPBS\\Scripts\\main.lua"
 debug.getinfo = function() return { source = "@" .. scriptPath } end
 
@@ -212,6 +226,26 @@ if mode == "gon" then os.execute("cp " .. scripts .. "/GameProfiles/Roku3.json "
 local brokenText = '{\n  "Target": "BP_Guard_C"\n  "PrimaryComponent": "x"\n}\n'
 if mode == "broken" then realOpen(work .. "/Scripts/GameProfiles/SomeGame.json", "wb"):write(brokenText):close() end
 realOpen(work .. "/native/UUEPBS.dll", "wb"):close()
+-- polaris / tekkenedit: the profile v2.7.1 wrote the first time it ran in TEKKEN 8 (before it knew the game);
+-- tekkenedit has it edited by hand (one value changed)
+local FIXTURE = "fixtures/Polaris_profile_v2.7.1.json"
+local fixtureText
+if (mode == "polaris" or mode == "tekkenedit") and not os.getenv("UUEPBS_MAKE_FIXTURE") then
+    local h = assert(realOpen(FIXTURE, "rb"), "fixture missing")
+    fixtureText = h:read("a")
+    h:close()
+    if mode == "tekkenedit" then
+        fixtureText = fixtureText:gsub('"SameSkeletonOnly": true', '"SameSkeletonOnly": false')
+    end
+    realOpen(work .. "/Scripts/GameProfiles/Polaris.json", "wb"):write(fixtureText):close()
+end
+-- tekkenjson: a hand-made TEKKEN 8 profile handed around before 2.7.3 (Target set, no TargetPrefer)
+local handJson = '{\n  "Project": "Polaris",\n  "Game": "TEKKEN 8",\n  "Target": "PolarisCharacterActor",\n'
+    .. '  "TargetClassPath": "/Script/Polaris.PolarisCharacterActor",\n  "PrimaryComponent": "",\n  "IncludeComponents": [],\n'
+    .. '  "ExcludeComponents": [],\n  "SameSkeletonOnly": true,\n  "BodyGroups": {},\n  "MorphGroups": {},\n  "ExcludeMorphs": []\n}\n'
+if mode == "tekkenjson" then
+    realOpen(work .. "/Scripts/GameProfiles/Polaris.json", "wb"):write(handJson):close()
+end
 -- GON: skeletons from an earlier session - the body's (good) and the shirt's (stale: the game was
 -- updated since and its first bone renamed)
 if mode == "gon" then
@@ -250,7 +284,14 @@ package.loaded["config"] = cfg
 dofile(scripts .. "/main.lua")
 local json = dofile(scripts .. "/uuepbs_json.lua")
 local function read(path) local f = realOpen(path, "rb"); if not f then return nil end; local t = f:read("a"); f:close(); return t end
-local profilePath = work .. "/Scripts/GameProfiles/" .. (mode == "gon" and "Roku3" or "SomeGame") .. ".json"
+if mode == "polaris" and os.getenv("UUEPBS_MAKE_FIXTURE") then
+    os.execute("mkdir -p fixtures")
+    local t = assert(read(work .. "/Scripts/GameProfiles/Polaris.json"))
+    realOpen(FIXTURE, "wb"):write(t):close()
+    realPrint("fixture written: " .. FIXTURE)
+    os.exit(0)
+end
+local profilePath = work .. "/Scripts/GameProfiles/" .. (mode == "gon" and "Roku3" or (mode == "polaris" or mode == "tekkenedit" or mode == "tekkenjson") and "Polaris" or "SomeGame") .. ".json"
 if mode == "generic" then
     local p = assert(json.decode(assert(read(profilePath), "profile file created on first run")))
     check(p.Project == "SomeGame" and p.Target == "" and p.PrimaryComponent == "" and p.SameSkeletonOnly == true, "new profile from Default")
@@ -268,6 +309,99 @@ check(loaded and loaded[1] == project .. "\\Binaries\\Win64\\ue4ss\\Mods\\UUEPBS
 check(loop and console.uuepbs and console.ubs and not console.xbs, "registrations")
 check(pollMs == 400, "poll interval " .. tostring(pollMs))
 check(fast and fastMs == 100, "morph loop registered at 100 ms: " .. tostring(fastMs))
+
+-- TEKKEN 8 (polaris): the pawn you control is only a controller / camera; the fighters are
+-- PolarisCharacterActor (an Actor, not a Character). The profile v2.7.1 wrote on its first run (defaults,
+-- never edited) is replaced by the ready-made one; a hand-edited one (tekkenedit) is left alone.
+local HINT = "the pawn you control, has no skeletal mesh"
+if mode == "polaris" or mode == "tekkenjson" then
+    if mode == "polaris" then
+        local p = assert(json.decode(assert(read(profilePath))))
+        check(p.Game == "TEKKEN 8" and p.Target == "PolarisCharacterActor" and p.TargetClassPath == "/Script/Polaris.PolarisCharacterActor"
+            and p.TargetPrefer == "PlayerNumber" and p.Project == "Polaris", "ready-made TEKKEN 8 profile written:\n" .. read(profilePath))
+        check(table.concat(printed, ""):find("updated game profile " .. project .. "\\Binaries\\Win64\\ue4ss\\Mods\\UUEPBS\\Scripts\\GameProfiles\\Polaris.json with the ready-made TEKKEN 8 profile", 1, true),
+            "upgrade logged:\n" .. table.concat(printed, ""))
+    else
+        check(read(profilePath) == handJson, "a hand-made profile is left as it is")
+    end
+    check(notifies["/Script/Polaris.PolarisCharacterActor"], "fighters spawning are noticed")
+    loop()
+    local s0 = run_peer(0, 0, "none", 0)
+    check(not s0:find("\nrig ", 1, true), "the camera pawn is not taken for the character:\n" .. s0)
+    local function fighter(n, x, side)
+        local a = obj("PolarisCharacterActor /Game/Maps/Battle.Battle:PersistentLevel.PolarisCharacterActor_" .. n, { PlayerNumber = side })
+        local m = comp("MasterSkeletalMeshComponent", a, bodyMesh, boneNames, boneParents, true)
+        local f = comp("Face", a, obj("SkeletalMesh /Game/Chars/FaceA.FaceA", { Skeleton = otherSkeleton }), { "root" }, { -1 }, false)
+        allComps[#allComps + 1] = m
+        allComps[#allComps + 1] = f
+        a._loc = { X = x, Y = 0, Z = 0 }
+        fighters[#fighters + 1] = a
+        notifies["/Script/Polaris.PolarisCharacterActor"](a)
+        return a
+    end
+    -- player 2 (the AI) is set up first and stands nearer the camera; player 1 is the one you play
+    fighter("2147470002", 300, 1)
+    for _ = 1, 12 do loop() end
+    local s0b = run_peer(0, 0, "none", 0)
+    check(s0b:find("target auto PolarisCharacterActor_2147470002", 1, true), "the only fighter so far is the default:\n" .. s0b)
+    fighter("2147470001", 0, 0)
+    for _ = 1, 30 do loop() end
+    local s1 = run_peer(0, 0, "none", 0)
+    check(s1:find("\nrig %x+ MasterSkeletalMeshComponent primary=1 owner=PolarisCharacterActor_2147470001 [^\n]*actor=player\n"), "player 1's fighter is the character edited:\n" .. s1)
+    check(s1:find("target auto PolarisCharacterActor_2147470001 [PlayerNumber 0] key=player", 1, true), "labelled with its player number:\n" .. s1)
+    check(table.concat(printed, ""):find("default character: PolarisCharacterActor_2147470001, the lowest PlayerNumber of", 1, true),
+        "the choice is logged:\n" .. table.concat(printed, ""))
+    check(not s1:find(" Face primary", 1, true), "its face (another skeleton) is not the primary mesh:\n" .. s1)
+    -- the one world search is the one-time check that the direct lookup misses nothing
+    check(scanCalls <= 1 and table.concat(printed, ""):find("are found without the world search", 1, true), "found without a world search: " .. scanCalls .. "\n" .. table.concat(printed, ""))
+    -- the window's list: both fighters (the other one can be picked and edited too)
+    run_peer(0, 0, "none", 0, "dll1", 1)
+    loop()
+    local s2 = run_peer(0, 0, "none", 0, "dll1", 1)
+    check(s2:find("cand PolarisCharacterActor_2147470002 [PlayerNumber 1]   3 m key=", 1, true), "the other fighter is in the list:\n" .. s2)
+    -- a fighter set up while the window is open shows up when the list is opened again (no object walk)
+    fighter("2147470003", 600, 1)
+    loop()
+    run_peer(0, 0, "none", 0, "dll1", 1, "-", "-", "-", 1)
+    for _ = 1, 2 do loop() end
+    local s3 = run_peer(0, 0, "none", 0, "dll1", 1)
+    check(s3:find("cand PolarisCharacterActor_2147470003 [PlayerNumber 1]   6 m key=", 1, true), "a fighter spawned later is listed:\n" .. s3)
+    check(not table.concat(printed, ""):find(HINT, 1, true), "no 'no body' hint with a Target set")
+    realPrint("lua harness OK (" .. mode .. ")")
+    os.exit(0)
+end
+if mode == "tekkenedit" or mode == "nobody" then
+    if mode == "tekkenedit" then
+        check(read(profilePath) == fixtureText, "a hand-edited profile is left alone")
+        check(not table.concat(printed, ""):find("updated game profile", 1, true), "not upgraded")
+    end
+    local function next_pawn(n, pawn)
+        pc.Pawn = pawn or obj("PolarisPawn /Game/Maps/Battle.Battle:PersistentLevel.PolarisPawn_21474824" .. n)
+        for _ = 1, 12 do loop() end
+        return table.concat(printed, "")
+    end
+    loop()
+    if mode == "nobody" then
+        -- a pawn with a body shows up: later bodiless pawns (menus, cutscenes) never bring the hint
+        next_pawn(0, npc)
+        next_pawn(1)
+        next_pawn(2)
+        local all = next_pawn(3)
+        check(not all:find(HINT, 1, true), "no hint once a pawn had a body:\n" .. all)
+    else
+        local two = next_pawn(1)
+        check(not two:find(HINT, 1, true), "no hint after two bodiless pawns (a main menu pawn is like that too)")
+        local three = next_pawn(2)
+        local _, n = three:gsub(HINT, "")
+        check(n == 1 and three:find("PolarisPawn_214748242 (player), " .. HINT, 1, true)
+            and three:find("UUEPBS has a ready-made profile for this game (TEKKEN 8): delete GameProfiles\\Polaris.json and restart to get it.", 1, true),
+            "hint after the third, with the ready-made profile mentioned:\n" .. three)
+        local _, again = next_pawn(4):gsub(HINT, "")
+        check(again == 1, "said once")
+    end
+    realPrint("lua harness OK (" .. mode .. ")")
+    os.exit(0)
+end
 
 -- generic: the game starts on a main menu pawn without meshes (Dawnwalker): looked for with the world
 -- search (the direct lookup has found nothing yet), and the one-time lookup check is kept for later

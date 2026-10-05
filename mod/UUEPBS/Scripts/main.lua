@@ -13,7 +13,7 @@
 -- those it only checks that the objects it already holds are still valid, and it only
 -- rewrites the bridge file when something actually changed.
 
-local VERSION = "2.7.1"
+local VERSION = "2.7.3"
 local TAG = "[UUEPBS] "
 local Config = require("config")
 
@@ -124,9 +124,11 @@ local profileKey = projectName ~= "" and projectName or "UnknownGame"
 local profileFileName = profileKey:gsub('[<>:"/\\|?*]', "_") .. ".json"
 local profileFile = profileDir .. "\\" .. profileFileName
 local legacyProfileFile = modsDir .. "\\" .. LEGACY_MOD_FOLDER .. "\\Scripts\\GameProfiles\\" .. profileFileName
-local PROFILE_ORDER = { "Project", "Game", "Target", "TargetClassPath", "PrimaryComponent", "IncludeComponents", "ExcludeComponents",
+local PROFILE_ORDER = { "Project", "Game", "Target", "TargetClassPath", "TargetPrefer", "PrimaryComponent", "IncludeComponents", "ExcludeComponents",
     "SameSkeletonOnly", "WorldMeshSearch", "BodyGroups", "MorphGroups", "ExcludeMorphs", "Hook", "_help" }
 local PROFILE_HELP = "Target: actor class to edit (empty = the pawn you control). TargetClassPath: optional full path of that class. "
+    .. "TargetPrefer: when several actors of the Target class exist, the default is the one with the lowest value of this "
+    .. "number property (e.g. a fighting game's PlayerNumber, 0 = player 1). "
     .. "PrimaryComponent: mesh whose bones are listed (empty = the Character's Mesh). Include/ExcludeComponents: mesh names. "
     .. "SameSkeletonOnly: also edit other meshes on the actor that share the primary mesh's skeleton. "
     .. "BodyGroups: remap Simplified Panel sliders to this game's bones, e.g. {\"Thighs\": [\"Hip_L\", \"Hip_R\"], \"Waist\": [\"Spine1_M\"]} "
@@ -144,6 +146,15 @@ local BuiltInProfiles = {
         TargetClassPath = "/Game/ROKUv3/BP_Rokuv3.BP_Rokuv3_C",
         PrimaryComponent = "CharacterMesh0",
     },
+    -- The pawn you control is only a controller / camera (PolarisPawn, PolarisBattleCameraPawn); the
+    -- fighters are PolarisCharacterActor (an Actor, not a Character) with UPolarisMasterSkeletalMeshComponent.
+    Polaris = {
+        Game = "TEKKEN 8",
+        Target = "PolarisCharacterActor",
+        TargetClassPath = "/Script/Polaris.PolarisCharacterActor",
+        -- both fighters are PolarisCharacterActor; PlayerNumber tells player 1 (0) from player 2
+        TargetPrefer = "PlayerNumber",
+    },
 }
 
 local Profile = { name = profileKey }
@@ -159,12 +170,69 @@ local function apply_profile_data(data)
     end
 end
 
+-- The profile file a game gets on its first run: from `seed` (a built-in profile or an old config.lua
+-- "Profiles" entry) over config.lua's Default. Also used to recognise such a file nobody has edited since.
+local function new_profile_text(seed)
+    local P = {}
+    for k, v in pairs(Config.Default or {}) do
+        P[k] = v
+    end
+    for k, v in pairs(seed or {}) do
+        P[k] = v
+    end
+    local out = { Project = profileKey, _help = PROFILE_HELP }
+    for _, k in ipairs(PROFILE_ORDER) do
+        if k ~= "Project" and k ~= "_help" and P[k] ~= nil then
+            out[k] = P[k]
+        end
+    end
+    if out.Game == nil then
+        out.Game = ""
+    end
+    out.BodyGroups = json.empty_object
+    out.MorphGroups = json.empty_object
+    out.ExcludeMorphs = {}
+    return json.encode_profile(out, PROFILE_ORDER)
+end
+
 do
+    -- Same JSON values (the "_help" text aside, which changes between versions).
+    local function same_json(a, b)
+        if type(a) ~= "table" or type(b) ~= "table" then
+            return a == b
+        end
+        for k, v in pairs(a) do
+            if k ~= "_help" and not same_json(v, b[k]) then
+                return false
+            end
+        end
+        for k in pairs(b) do
+            if k ~= "_help" and a[k] == nil then
+                return false
+            end
+        end
+        return true
+    end
+
     for k, v in pairs(Config.Default or {}) do
         Profile[k] = v
     end
     local text = read_text(profileFile)
-    local legacyText = not text and read_text(legacyProfileFile) or nil
+    -- Written on a first run before UUEPBS knew this game, and never edited since: the ready-made
+    -- profile replaces it (TEKKEN 8 with 2.7.1). A file anyone touched is left alone.
+    local builtIn = BuiltInProfiles[projectName]
+    local upgrade = text ~= nil and builtIn ~= nil and same_json(json.decode(text), json.decode(new_profile_text((Config.Profiles or {})[projectName])))
+    -- Settings a ready-made profile gained after the game's file was written (TargetPrefer for TEKKEN 8)
+    -- apply when the file does not have them at all; anything the file sets wins.
+    if builtIn and not upgrade then
+        for k, v in pairs(builtIn) do
+            Profile[k] = v
+        end
+    end
+    if upgrade then
+        text = nil
+    end
+    local legacyText = not text and not upgrade and read_text(legacyProfileFile) or nil
     if text then
         local data, err = json.decode(text)
         if type(data) == "table" then
@@ -180,24 +248,12 @@ do
         profileStatus = "migrated"
     else
         -- First run in this game: built-in profile, else an old config.lua "Profiles" entry, else defaults.
-        local seed = BuiltInProfiles[projectName] or (Config.Profiles or {})[projectName] or {}
+        local seed = builtIn or (Config.Profiles or {})[projectName] or {}
         for k, v in pairs(seed) do
             Profile[k] = v
         end
-        local out = { Project = profileKey, _help = PROFILE_HELP }
-        for _, k in ipairs(PROFILE_ORDER) do
-            if k ~= "Project" and k ~= "_help" and Profile[k] ~= nil then
-                out[k] = Profile[k]
-            end
-        end
-        if out.Game == nil then
-            out.Game = ""
-        end
-        out.BodyGroups = json.empty_object
-        out.MorphGroups = json.empty_object
-        out.ExcludeMorphs = {}
-        pendingProfileText = json.encode_profile(out, PROFILE_ORDER)
-        profileStatus = "new"
+        pendingProfileText = new_profile_text(seed)
+        profileStatus = upgrade and "upgraded" or "new"
     end
     Profile.name = profileKey
 end
@@ -219,7 +275,12 @@ local function flush_profile()
             needProfileFolder = false
             stateDirty = true
         end
-        say("%s game profile %s", profileStatus == "migrated" and "copied the XTGBodySlider" or "created", profileFile)
+        if profileStatus == "upgraded" then
+            say("updated game profile %s with the ready-made %s profile (it still had the defaults written on the first run)", profileFile,
+                tostring(Profile.Game or projectName))
+        else
+            say("%s game profile %s", profileStatus == "migrated" and "copied the XTGBodySlider" or "created", profileFile)
+        end
     elseif not needProfileFolder then
         needProfileFolder = true
         stateDirty = true
@@ -733,10 +794,31 @@ local keptOrder, keptSet = {}, {} -- characters with edits, from the DLL ("keep"
 local keptInRange = {} -- actor key -> near the player at the last scan (kept NPCs)
 local goneKeys = {} -- kept characters that no longer exist (reported until the DLL drops them)
 
+-- "TargetPrefer": `due` = when the default is chosen again after a new Target actor appeared (ms, os.clock
+-- based; twice, as the game may set the number after spawning it); `said` = the choice last logged.
+-- `actor` = the last actor of the profile's Target class found.
+local Prefer = { actor = nil, due = {}, said = "" }
+
+-- The profile's "TargetPrefer" number on an actor (nil when not set, missing or not a number).
+function Prefer.value(actor)
+    local prop = Profile.TargetPrefer
+    if type(prop) ~= "string" or prop == "" then
+        return nil
+    end
+    local ok, v = pcall(function()
+        return actor[prop]
+    end)
+    return ok and type(v) == "number" and v or nil
+end
+
 local function actor_label(actor, pawn)
     local label = name_of(actor)
     if pawn and same_object(actor, pawn) then
         label = label .. " (player)"
+    end
+    local v = Prefer.value(actor)
+    if v then
+        label = string.format("%s [%s %d]", label, Profile.TargetPrefer, v)
     end
     return label
 end
@@ -748,24 +830,37 @@ local function full_name(obj)
     return ok and full or nil
 end
 
-local profileTarget = nil -- last actor of the profile's Target class
 
 local function find_profile_target()
+    local best, bestV, all = nil, nil, {}
     for _, a in ipairs(FindAllOf(Profile.Target) or {}) do
         if alive(a) and not is_default_object(a) then
-            profileTarget = a
-            return a
+            local v = Prefer.value(a)
+            all[#all + 1] = string.format("%s=%s", name_of(a), v and tostring(v) or "?")
+            if best == nil or (v ~= nil and (bestV == nil or v < bestV)) then
+                best, bestV = a, v
+            end
+            if (Profile.TargetPrefer or "") == "" then
+                break -- the first one found
+            end
         end
     end
-    profileTarget = nil
-    return nil
+    Prefer.actor = best
+    if best and #all > 1 then
+        local text = string.format("default character: %s, the lowest %s of %s", name_of(best), tostring(Profile.TargetPrefer), table.concat(all, ", "))
+        if text ~= Prefer.said then
+            Prefer.said = text
+            say("%s (pick another in the window's Character list)", text)
+        end
+    end
+    return best
 end
 
 local function default_target()
     if Profile.Target and Profile.Target ~= "" then
         -- Keep the one we found while it lives; only search again when it is gone.
-        if profileTarget and alive(profileTarget) then
-            return profileTarget
+        if Prefer.actor and alive(Prefer.actor) then
+            return Prefer.actor
         end
         return find_profile_target()
     end
@@ -775,7 +870,7 @@ end
 -- The default character without any object search (nil when it is not known right now).
 local function cheap_default()
     if Profile.Target and Profile.Target ~= "" then
-        return (profileTarget and alive(profileTarget)) and profileTarget or nil
+        return (Prefer.actor and alive(Prefer.actor)) and Prefer.actor or nil
     end
     return player_pawn()
 end
@@ -837,8 +932,8 @@ local function refresh_candidates(full)
             for _, a in ipairs(FindAllOf(Profile.Target) or {}) do
                 add(a)
             end
-        elseif profileTarget then
-            add(profileTarget)
+        elseif Prefer.actor then
+            add(Prefer.actor)
         end
     end
     if full or not USE_LIVE_LIST or not liveCharactersSeen then
@@ -1516,6 +1611,9 @@ do
     local seenActor = {} -- actor key -> "address|full name" it was last collected for (a new one settles)
     local lastReport = {} -- actor key -> scan report last logged
     local slowSaid = {} -- actor key -> ms of the last slow scan shown
+    -- Pawns you control without a body (TEKKEN 8: PolarisPawn is only a controller / camera; the fighters
+    -- are other actors). A main menu pawn is like that too, so the hint waits for a third one in a row.
+    local bodiless = { seen = {}, count = 0, found = false, said = false }
     local leftOutText = ""
     local keptOverflow = 0
     local fullPass = nil -- { t0, ms, chars, meshes } while a full rescan is being worked through
@@ -1913,6 +2011,23 @@ do
         if e.key == PLAYER_KEY and switch_on() then
             note_switch(e, built)
         end
+        if e.key == PLAYER_KEY and not bodiless.said and (Profile.Target or "") == "" then
+            if #built > 0 then
+                bodiless.found = true
+            elseif not bodiless.found and e.full and not bodiless.seen[e.full] then
+                bodiless.seen[e.full] = true
+                bodiless.count = bodiless.count + 1
+                if bodiless.count >= 3 then
+                    bodiless.said = true
+                    local builtIn = BuiltInProfiles[projectName]
+                    say("%s, the pawn you control, has no skeletal mesh (and neither had the ones before it). In some games the character "
+                        .. "is a separate actor (fighting games, games where you control a camera or a vehicle): put its class in \"Target\" in "
+                        .. "GameProfiles\\%s - the UE4SS Live View or object dump shows it.%s", e.label, profileFileName,
+                        builtIn and string.format(" UUEPBS has a ready-made profile for this game (%s): delete GameProfiles\\%s and restart to get it.",
+                            tostring(builtIn.Game or projectName), profileFileName) or "")
+                end
+            end
+        end
         log_report(e.key == PLAYER_KEY and "" or e.key, report, e.key ~= targetInfo.key)
         stats.collects = stats.collects + 1
         stats.ms, stats.label, stats.meshes, stats.how = ms, e.label, #e.comps, how
@@ -2247,10 +2362,18 @@ do
             return target == nil
         end
         if Profile.Target and Profile.Target ~= "" then
-            if target and same_object(target, profileTarget) then
+            -- another actor of the Target class appeared: it may be the preferred one (player 1)
+            if Prefer.due[1] and os.clock() * 1000.0 >= Prefer.due[1] then
+                table.remove(Prefer.due, 1)
+                local before = Prefer.actor
+                if find_profile_target() and not same_object(Prefer.actor, before) then
+                    return true
+                end
+            end
+            if target and same_object(target, Prefer.actor) then
                 return false
             end
-            if profileTarget and alive(profileTarget) then
+            if Prefer.actor and alive(Prefer.actor) then
                 return true -- e.g. just switched back to automatic
             end
             -- No character yet (menus, loading): search, but back off while nothing turns up.
@@ -2761,7 +2884,12 @@ end
 
 if Profile.TargetClassPath and Profile.TargetClassPath ~= "" then
     pcall(function()
-        NotifyOnNewObject(Profile.TargetClassPath, function()
+        NotifyOnNewObject(Profile.TargetClassPath, function(obj)
+            -- also into the picker's list (a Target class need not be a Character: TEKKEN 8's fighters aren't)
+            note_character(obj)
+            if (Profile.TargetPrefer or "") ~= "" then
+                Prefer.due = { now_ms() + 1000, now_ms() + 4000 }
+            end
             schedule_scan(1500)
             if windowOpen then
                 candidatesDue = 0

@@ -112,6 +112,33 @@ M = [
      "        if not still(l.actor, l.full) then\n            Switch.links[key] = nil", "        if false then\n            Switch.links[key] = nil"),
     ("2.7: anyone with a face linked",
      "    if not who or not Switch.party[who] then", "    if not who then"),
+    ("2.7.2: no TEKKEN 8 profile",
+     "    Polaris = {\n        Game = \"TEKKEN 8\",", "    Polaris_ = {\n        Game = \"TEKKEN 8\","),
+    ("2.7.2: untouched first-run profile not upgraded",
+     "local upgrade = text ~= nil and builtIn ~= nil and same_json(", "local upgrade = false and same_json("),
+    ("2.7.2: edited profile upgraded too",
+     "local upgrade = text ~= nil and builtIn ~= nil and same_json(json.decode(text), json.decode(new_profile_text((Config.Profiles or {})[projectName])))",
+     "local upgrade = text ~= nil and builtIn ~= nil"),
+    ("2.7.2: Target spawns not in the list",
+     "            -- also into the picker's list (a Target class need not be a Character: TEKKEN 8's fighters aren't)\n            note_character(obj)\n", "\n"),
+    ("2.7.2: hint after the first bodiless pawn",
+     "                if bodiless.count >= 3 then", "                if bodiless.count >= 1 then"),
+    ("2.7.2: hint even after a pawn had a body",
+     "            elseif not bodiless.found and e.full", "            elseif e.full"),
+    ("2.7.2: hint repeated",
+     "                    bodiless.said = true\n", "\n"),
+    ("2.7.3: the highest TargetPrefer wins",
+     "if best == nil or (v ~= nil and (bestV == nil or v < bestV)) then", "if best == nil or (v ~= nil and (bestV == nil or v > bestV)) then"),
+    ("2.7.3: TargetPrefer ignored (first found)",
+     "            if (Profile.TargetPrefer or \"\") == \"\" then\n                break", "            if true then\n                break"),
+    ("2.7.3: no second look when another Target actor spawns",
+     "                Prefer.due = { now_ms() + 1000, now_ms() + 4000 }", "                Prefer.due = {}"),
+    ("2.7.3: settings new in a ready-made profile not applied",
+     "    if builtIn and not upgrade then", "    if false then"),
+    ("2.7.3: no player number in the labels",
+     "    local v = Prefer.value(actor)\n    if v then", "    local v = Prefer.value(actor)\n    if false then"),
+    ("2.7.3: the choice not logged",
+     "            say(\"%s (pick another in the window's Character list)\", text)", "            local _ = text"),
 ]
 
 bad = 0
@@ -128,7 +155,7 @@ try:
         with open(os.path.join(target, "main.lua"), "w", encoding="utf-8") as f:
             f.write(base.replace(old, new))
         caught = None
-        for mode in ["gon", "generic", "nodir", "broken", "legacy"]:
+        for mode in ["gon", "generic", "nodir", "broken", "legacy", "polaris", "tekkenjson", "tekkenedit", "nobody"]:
             r = subprocess.run([lua, "lua_harness.lua", target, peer, work, mode], capture_output=True, text=True)
             if r.returncode != 0:
                 caught = mode + ": " + ((r.stderr.strip().splitlines() or ["?"])[0])[:110]

@@ -1,0 +1,14 @@
+{
+  "Project": "Polaris",
+  "Game": "",
+  "Target": "",
+  "TargetClassPath": "",
+  "PrimaryComponent": "",
+  "IncludeComponents": [],
+  "ExcludeComponents": [],
+  "SameSkeletonOnly": true,
+  "BodyGroups": {},
+  "MorphGroups": {},
+  "ExcludeMorphs": [],
+  "_help": "Target: actor class to edit (empty = the pawn you control). TargetClassPath: optional full path of that class. PrimaryComponent: mesh whose bones are listed (empty = the Character's Mesh). Include/ExcludeComponents: mesh names. SameSkeletonOnly: also edit other meshes on the actor that share the primary mesh's skeleton. BodyGroups: remap Simplified Panel sliders to this game's bones, e.g. {\"Thighs\": [\"Hip_L\", \"Hip_R\"], \"Waist\": [\"Spine1_M\"]} (real bone names from the Detailed Panel, * wildcards allowed; [] hides a slider; new names add sliders). MorphGroups: Simplified Panel sliders for morph targets, e.g. {\"Breasts\": [\"BreastSize*\"]} (names from Detailed Panel > Morphs). ExcludeMorphs: morph names to hide, e.g. [\"*_corrective*\"]. WorldMeshSearch: true = find meshes by searching every skeletal mesh in the world (slower; only for games where the log says the direct mesh lookup misses meshes)."
+}

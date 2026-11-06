@@ -383,10 +383,83 @@ namespace uuepbs
         // Each mesh is sculpted with its own character's edits.
         const bool on = m_enabled.load(std::memory_order_relaxed);
         const uint64_t wanted = rig->actor->revision | (on ? 0 : kDisabledBit);
+        rig->sculptor.set_ground(m_ground); // cheap when unchanged; a change forces the re-bind below
+        // Auto Ground: the character's main mesh measures the lift. Its other meshes (head, outfit - even ones on
+        // the full skeleton with legs) compare their pose with the main mesh's: a pose copied from the main mesh's
+        // grounded pose needs nothing more; one animated on its own is lifted the same way.
+        rig->sculptor.set_ground_primary(rig->primary); // (before the bind: other meshes plan a little differently)
         if (rig->sculptor.bound_revision() != wanted)
         {
             rig->sculptor.bind(on ? rig->actor->book : m_empty_book, wanted);
         }
+        rig->sculptor.set_shared_lift(rig->actor->ground_lift);
+        if (!rig->primary)
+        {
+            if (rig->probe_name != rig->actor->hip_bone)
+            {
+                rig->probe_name = rig->actor->hip_bone;
+                rig->probe_index = rig->probe_name.empty() ? -1 : rig->sculptor.find(rig->probe_name);
+            }
+            rig->sculptor.set_lift_probe(rig->probe_index, rig->actor->hip_before, rig->actor->hip_after);
+            // Copy detection: map this mesh's bones onto the main mesh's by name (rebuilt when the main mesh changes).
+            Actor& a = *rig->actor;
+            if (rig->follow_revision != a.main_revision)
+            {
+                rig->follow_revision = a.main_revision;
+                const auto& names = rig->sculptor.names();
+                rig->follow_map.assign(names.size(), -1);
+                for (size_t i = 0; i < names.size(); ++i)
+                {
+                    const auto it = a.main_lookup.find(fold_case(names[i]));
+                    if (it != a.main_lookup.end())
+                    {
+                        rig->follow_map[i] = it->second;
+                    }
+                }
+            }
+            const bool ready = !a.main_lookup.empty() && a.main_before.size() == static_cast<size_t>(a.main_bones) * RigSculptor::kPublishStride &&
+                               a.main_after.size() == a.main_before.size() && rig->follow_map.size() == rig->sculptor.names().size();
+            rig->sculptor.set_follow_reference(ready ? rig->follow_map.data() : nullptr, ready ? a.main_before.data() : nullptr,
+                                               ready ? a.main_after.data() : nullptr, ready ? static_cast<size_t>(a.main_bones) : 0);
+        }
+        struct LiftOut
+        {
+            Rig* rig;
+            ~LiftOut()
+            {
+                if (!rig->primary)
+                {
+                    return;
+                }
+                Actor& a = *rig->actor;
+                // the main mesh's bones and their positions before / after, for the other meshes
+                if (a.main_component != rig->component || a.main_bones != rig->sculptor.bone_count())
+                {
+                    a.main_component = rig->component;
+                    a.main_bones = rig->sculptor.bone_count();
+                    a.main_lookup.clear();
+                    const auto& names = rig->sculptor.names();
+                    for (size_t i = 0; i < names.size(); ++i)
+                    {
+                        a.main_lookup.emplace(fold_case(names[i]), static_cast<int32_t>(i));
+                    }
+                    ++a.main_revision;
+                }
+                if (rig->sculptor.published_before().size() == static_cast<size_t>(a.main_bones) * RigSculptor::kPublishStride)
+                {
+                    a.main_before = rig->sculptor.published_before();
+                    a.main_after = rig->sculptor.published_after();
+                }
+                if (rig->sculptor.has_legs())
+                {
+                    a.ground_lift = rig->sculptor.last_lift();
+                    const int32_t hip = rig->sculptor.hip_bone();
+                    a.hip_bone = hip >= 0 ? fold_case(rig->sculptor.names()[hip]) : std::string();
+                    a.hip_before = rig->sculptor.hip_before();
+                    a.hip_after = rig->sculptor.hip_after();
+                }
+            }
+        } lift_out{rig};
         // No reference pose from Lua: measure mirroring from an early live frame instead
         // (before this frame's edits are applied).
         if (rig->frames + 1 == kLiveMirrorFrame && !m_mirror_from_reference && m_mirror.centre_axis < 0 && m_view.names == rig->sculptor.names())
@@ -452,6 +525,41 @@ namespace uuepbs
                 }
             }
         }
+    }
+
+    void Registry::set_ground(const GroundOptions& options)
+    {
+        std::lock_guard guard(m_lock);
+        m_ground = options;
+    }
+
+    GroundOptions Registry::ground() const
+    {
+        std::lock_guard guard(m_lock);
+        return m_ground;
+    }
+
+    double Registry::ground_lift_of(const std::string& key) const
+    {
+        std::lock_guard guard(m_lock);
+        const auto it = m_actors.find(key);
+        return it == m_actors.end() ? 0.0 : it->second.ground_lift;
+    }
+
+    std::string Registry::ground_report() const
+    {
+        std::lock_guard guard(m_lock);
+        std::string out;
+        for (const auto& rig : m_rigs)
+        {
+            if (rig->stale || !rig->actor || rig->actor->book.empty() || rig->frames == 0)
+            {
+                continue;
+            }
+            out += "  " + rig->owner + " / " + rig->label + " (" + std::to_string(rig->sculptor.legs().size()) + " legs): " +
+                   rig->sculptor.ground_report() + "\n";
+        }
+        return out;
     }
 
     void Registry::bump_edits(Actor& actor)
@@ -863,7 +971,8 @@ namespace uuepbs
         out.reserve(m_rigs.size());
         for (const auto& rig : m_rigs)
         {
-            out.push_back({rig->label, rig->owner, rig->sculptor.bone_count(), rig->frames, rig->stale, rig->primary, rig->actor_key, rig->actor_key == m_active});
+            out.push_back({rig->label, rig->owner, rig->sculptor.bone_count(), rig->frames, rig->stale, rig->primary, rig->actor_key, rig->actor_key == m_active,
+                           static_cast<int32_t>(rig->sculptor.legs().size()), rig->sculptor.took_shared_lift()});
         }
         return out;
     }

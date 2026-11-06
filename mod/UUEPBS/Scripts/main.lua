@@ -2524,6 +2524,11 @@ local function build_state()
         "mkdir=" .. (needProfileFolder and clean(profileDir) or ""),
         "profile_file=" .. clean(profileFile),
         "engine=" .. clean(engineVersion),
+        -- Auto Ground done by the DLL (lift + leg IK in the pose itself)
+        "ground=" .. (late.groundDll.on and "1" or "0"),
+        "ground_ik=" .. (Config.AutoGroundLegIK == false and "0" or "1"),
+        "ground_extra=" .. string.format("%.3f", late.groundDll.extra),
+        "ground_max=" .. tostring(tonumber(Config.AutoGroundMaxCm) or 40),
     }, "\t"))
     add("scan\t" .. scanCount)
     add("target\t" .. clean(targetInfo.id) .. "\t" .. clean(targetInfo.label) .. "\t" .. clean(targetInfo.key) .. "\t" .. clean(targetInfo.identity or ""))
@@ -2760,6 +2765,34 @@ local function now_ms()
     return os.clock() * 1000.0
 end
 
+-- Auto Ground (uuepbs_ground.lua): lifts the player's mesh by what the leg sliders sank the feet.
+-- (fields of `late`, not locals: this chunk is at Lua's limit of 200 locals)
+-- AutoGroundMode "dll" (default): the DLL lifts the pose and bends the legs onto the ground itself
+-- (needs a DLL built with Auto Ground). "lua": the older way, moving the player's mesh from here.
+late.groundMode = string.lower(tostring(Config.AutoGroundMode or "dll"))
+late.groundDll = { on = Config.AutoGround ~= false and late.groundMode == "dll", extra = tonumber(Config.AutoGroundExtraCm) or 0 }
+late.ground = require("uuepbs_ground").new({
+    json = json,
+    read_text = read_text,
+    say = say,
+    alive = alive,
+    still = still,
+    address_of = function(obj)
+        local ok, a = pcall(address_of, obj)
+        return ok and a or nil
+    end,
+    fname = function(name)
+        return FName(name)
+    end,
+    sessionFile = presetFolder .. "\\_last_session.json",
+    playerKey = PLAYER_KEY,
+    enabled = Config.AutoGround ~= false and late.groundMode == "lua",
+    extraCm = Config.AutoGroundExtraCm,
+    maxCm = Config.AutoGroundMaxCm,
+    followPose = Config.AutoGroundFollowPose ~= false,
+    smoothing = Config.AutoGroundSmoothing,
+})
+
 local scanDue = 0 -- when the plan is next worked out (see make_plan)
 local scanFull = false -- ... and everyone collected again
 local candidatesDue = 0 -- once at start; afterwards only on request or while the window is open
@@ -2833,6 +2866,7 @@ local function tick()
         elseif next(morphApplied) ~= nil then
             watch_morphs()
         end
+        late.ground.tick(rigs)
         write_state()
     end)
     if not ok then
@@ -2871,6 +2905,15 @@ local function every(ms, fn)
 end
 
 every(POLL_MS, tick)
+-- Auto Ground following the live pose (terrain): a handful of bone reads and one mesh move per run.
+if Config.AutoGround ~= false and late.groundMode == "lua" and Config.AutoGroundFollowPose ~= false then
+    every(math.max(1, tonumber(Config.AutoGroundIntervalMs) or 16), function()
+        local ok, err = pcall(late.ground.fast)
+        if not ok then
+            say("auto ground error: %s", tostring(err))
+        end
+    end)
+end
 if MORPH_MS > 0 and MORPH_MS < POLL_MS then
     every(math.max(33, MORPH_MS), morph_tick)
 end
@@ -2930,7 +2973,7 @@ local function rest_of(params, first)
     return table.concat(parts, " ")
 end
 
-local usage = "uuepbs (or ubs) ui | status | rescan | list | load <name> | save <name> | on | off | reset [all] | diag | skin [name] | morph <name> [weight]"
+local usage = "uuepbs (or ubs) ui | status | rescan | list | load <name> | save <name> | on | off | reset [all] | diag | skin [name] | morph <name> [weight] | ground [on|off|<extra cm>]"
 
 local function console(_, params, out)
     local verb = string.lower(params[1] or "")
@@ -2954,6 +2997,29 @@ local function console(_, params, out)
         send_command("status", "", true)
     elseif verb == "load" or verb == "save" or verb == "skin" or verb == "morph" or verb == "reset" then
         send_command(verb, rest_of(params, 2), true)
+    elseif verb == "ground" then
+        -- ubs ground [on | off | <extra cm>]
+        local arg = string.lower(params[2] or "")
+        if late.groundMode == "dll" then
+            -- done by the DLL: change its settings (sent with the next bridge write)
+            if arg == "on" or arg == "off" then
+                late.groundDll.on = arg == "on"
+            elseif tonumber(arg) then
+                late.groundDll.extra = tonumber(arg)
+            end
+            stateDirty = true
+            reply(string.format("auto ground (DLL) %s, extra %.1f cm, leg IK %s - \"ubs status\" shows the lift", late.groundDll.on and "on" or "off",
+                late.groundDll.extra, Config.AutoGroundLegIK == false and "off" or "on"))
+            return true
+        end
+        if arg == "on" or arg == "off" then
+            ExecuteInGameThread(function()
+                late.ground.set_enabled(arg == "on")
+            end)
+        elseif tonumber(arg) then
+            late.ground.set_extra(tonumber(arg))
+        end
+        reply(late.ground.status())
     elseif verb == "list" or verb == "on" or verb == "off" or verb == "diag" then
         send_command(verb, "", true)
     else

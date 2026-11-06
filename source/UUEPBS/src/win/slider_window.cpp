@@ -633,12 +633,27 @@ namespace uuepbs::ui
                 {
                     return;
                 }
+                // Hand the focus back to the game *before* hiding: once this window is hidden Windows activates
+                // whatever is next (the UE4SS console, another program) and this process may no longer set the
+                // foreground window - the game would look active but the hotkey (which needs the game focused)
+                // would do nothing until the user clicked away and back.
+                const DWORD self = GetCurrentProcessId();
+                auto ours = [self](HWND w) {
+                    DWORD pid = 0;
+                    return w && IsWindow(w) && IsWindowVisible(w) && GetWindowThreadProcessId(w, &pid) && pid == self;
+                };
+                HWND target = (ours(m_return_focus) && m_return_focus != m_hwnd) ? m_return_focus : find_game_window();
+                if (target)
+                {
+                    SetForegroundWindow(target);
+                }
                 ShowWindow(m_hwnd, SW_HIDE);
                 m_shown.store(false);
-                DWORD pid = 0;
-                if (m_return_focus && IsWindow(m_return_focus) && GetWindowThreadProcessId(m_return_focus, &pid) && pid == GetCurrentProcessId())
+                DWORD now_pid = 0;
+                GetWindowThreadProcessId(GetForegroundWindow(), &now_pid);
+                if (target && now_pid != self)
                 {
-                    SetForegroundWindow(m_return_focus);
+                    SetForegroundWindow(target); // something else took it while hiding: try once more
                 }
             }
 

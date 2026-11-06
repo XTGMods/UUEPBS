@@ -85,6 +85,29 @@ return {
     -- feels live. 0 = only every PollIntervalMs. Nothing runs at this rate while it is closed.
     MorphPollMs = 100,
 
+    -- Auto Ground: longer legs sink the feet into the floor (the pelvis stays where the animation put
+    -- it), shorter legs make them float. With this on, the player's mesh is moved up or down by what
+    -- the sliders moved the lowest foot bones, worked out from the reference pose and the sliders in
+    -- _last_session.json. Visual only: the collision capsule stays the same.
+    -- Console: "ubs ground" (status), "ubs ground on|off", "ubs ground <cm>" (extra, this session).
+    AutoGround = true,
+    -- "dll": done inside the pose by the DLL every frame - the body is lifted by what the foot that sank
+    --        most sank, and every other leg is bent with IK so its foot stays where the game's foot IK put
+    --        it (stairs, slopes). Works for every edited character, not just the player. Needs the DLL
+    --        built with Auto Ground.
+    -- "lua": the older way - the player's mesh component is moved from here (one offset for the whole
+    --        body, so on a step the higher foot may float). The settings below marked (lua) are for it.
+    AutoGroundMode = "dll",
+    AutoGroundLegIK = true,  -- (dll) bend the other legs back onto the ground; false = lift only
+    AutoGroundExtraCm = 0, -- added to the computed lift (+ up, - down) to fine-tune per game
+    AutoGroundMaxCm = 40,  -- the lift never goes beyond this, either way
+    -- (lua) Follow the live pose (stairs, slopes, bent knees): the lift is worked out from where the bones
+    -- are on each frame, not from the standing reference pose. One mesh offset cannot fix both feet,
+    -- so on a step the higher foot may float slightly. false = the fixed reference pose lift only.
+    AutoGroundFollowPose = true,
+    AutoGroundIntervalMs = 16,  -- how often the live lift is updated (16 = about every frame at 60 fps)
+    AutoGroundSmoothing = 0,    -- 0 = none; 0.5 = the lift moves half way to the new value each update (less jitter, a little lag)
+
     Verbose = false,
 
     -- Starting values for a new game profile. The first time the mod runs in a game it writes

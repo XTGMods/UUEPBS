@@ -73,7 +73,7 @@ $LUA lua_harness.lua "$SCRIPTS" "$OUT/bridge_peer" "$OUT/bridge" gon
 echo "--- harness mode: gon, mesh asset property unreadable (UE4SS FObjectPtrProperty)"
 mkdir -p "$OUT/bridge_objptr"
 UUEPBS_OBJPTR=1 $LUA lua_harness.lua "$SCRIPTS" "$OUT/bridge_peer" "$OUT/bridge_objptr" gon
-for m in generic nodir broken legacy polaris nobody tekkenedit tekkenjson names; do
+for m in generic nodir broken legacy polaris nobody tekkenedit tekkenjson names sb sbon sbnew; do
   echo "--- harness mode: $m"
   $LUA lua_harness.lua "$SCRIPTS" "$OUT/bridge_peer" "$OUT/bridge" "$m"
 done

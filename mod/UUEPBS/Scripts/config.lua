@@ -103,6 +103,11 @@ return {
     -- "outfit" (the rule above) or "mesh": one shared mesh is enough, for games whose cutscene / menu
     -- copies only reuse the body. Careful: NPCs that share the body mesh with the character then match too.
     SceneCopyMatch = "outfit",
+    -- true = also look at every new skeletal mesh component and scene capture the moment the engine makes it
+    -- (finds menu / cutscene copies a little sooner). Off by default: UE4SS runs that Lua on whatever thread
+    -- creates the object, and games that stream levels on the async loading thread (Stellar Blade) crash.
+    -- Like any setting here it can be set per game in GameProfiles\<game>.json "Features".
+    SceneCopyWatchNew = false,
 
     -- Character Scale > Camera: moves the third-person camera of the character you play (its spring arm /
     -- camera boom, else its camera component, else its eye height) by the Camera sliders, e.g. up with

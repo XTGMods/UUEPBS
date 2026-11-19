@@ -125,7 +125,7 @@ local profileFileName = profileKey:gsub('[<>:"/\\|?*]', "_") .. ".json"
 local profileFile = profileDir .. "\\" .. profileFileName
 local legacyProfileFile = modsDir .. "\\" .. LEGACY_MOD_FOLDER .. "\\Scripts\\GameProfiles\\" .. profileFileName
 local PROFILE_ORDER = { "Project", "Game", "Target", "TargetClassPath", "TargetPrefer", "PrimaryComponent", "IncludeComponents", "ExcludeComponents",
-    "SameSkeletonOnly", "WorldMeshSearch", "BodyGroups", "MorphGroups", "ExcludeMorphs", "AutoMorphGroups", "Names", "Looks", "Hook", "_help" }
+    "SameSkeletonOnly", "WorldMeshSearch", "BodyGroups", "MorphGroups", "ExcludeMorphs", "AutoMorphGroups", "Names", "Looks", "Features", "Hook", "_help" }
 local PROFILE_HELP = "Target: actor class to edit (empty = the pawn you control). TargetClassPath: optional full path of that class. "
     .. "TargetPrefer: when several actors of the Target class exist, the default is the one with the lowest value of this "
     .. "number property (e.g. a fighting game's PlayerNumber, 0 = player 1). "
@@ -139,7 +139,9 @@ local PROFILE_HELP = "Target: actor class to edit (empty = the pawn you control)
     .. "Names: names shown in the window's character list, by engine name, e.g. {\"BP_Rokuv3_C\": \"Roku\", \"00_EVE_*\": \"Eve\"} "
     .. "(actor, class or mesh asset names; * wildcards allowed, a plain name also matches names that start with it). "
     .. "WorldMeshSearch: true = find meshes by searching every skeletal mesh in the world (slower; only for games where "
-    .. "the log says the direct mesh lookup misses meshes)."
+    .. "the log says the direct mesh lookup misses meshes). "
+    .. "Features: config.lua settings for this game only, e.g. {\"SceneCopyWatchNew\": false, \"HandContact\": false} "
+    .. "(any config.lua key except Default, Profiles and the folder settings; the profile wins over config.lua)."
 
 -- Games that ship with a ready-made profile (used only when their file does not exist yet).
 local BuiltInProfiles = {
@@ -157,6 +159,15 @@ local BuiltInProfiles = {
         TargetClassPath = "/Script/Polaris.PolarisCharacterActor",
         -- both fighters are PolarisCharacterActor; PlayerNumber tells player 1 (0) from player 2
         TargetPrefer = "PlayerNumber",
+    },
+    -- Stellar Blade streams levels on the async loading thread: Lua run from NotifyOnNewObject there
+    -- (Scene Copies' new-mesh watch) races the game thread's Lua and crashes the game.
+    SB = {
+        Game = "Stellar Blade",
+        PrimaryComponent = "CharacterMesh0",
+        SameSkeletonOnly = true,
+        Hook = { Slot = 303, Buffers = "0x5A8", ReadIndex = "0x674" },
+        Features = { SceneCopyWatchNew = false },
     },
 }
 
@@ -259,6 +270,29 @@ do
         profileStatus = upgrade and "upgraded" or "new"
     end
     Profile.name = profileKey
+
+    -- "Features": config.lua settings for this game only. The ready-made profile's come first, so one
+    -- it gained later still applies to a file written before; the file's own values win.
+    local features, applied = {}, {}
+    local sources = { builtIn and builtIn.Features or false, Profile.Features or false }
+    for i = 1, 2 do
+        local src = sources[i]
+        if type(src) == "table" then
+            for k, v in pairs(src) do
+                features[k] = v
+            end
+        end
+    end
+    -- Not here: the profile tables themselves, and folders already in use by now.
+    local skip = { Default = true, Profiles = true, PresetFolder = true, PresetFolderName = true, SkinFolder = true, SkinFolderName = true }
+    for k, v in pairs(features) do
+        if type(k) == "string" and k:sub(1, 1) ~= "_" and not skip[k] then
+            Config[k] = v
+            applied[#applied + 1] = k .. " = " .. (type(v) == "table" and "{...}" or tostring(v))
+        end
+    end
+    table.sort(applied)
+    Profile.featureNote = table.concat(applied, ", ")
 end
 
 local stateDirty = true -- bridge_in.txt needs rewriting
@@ -326,6 +360,9 @@ if profileStatus:sub(1, 6) == "error:" then
     say("GameProfiles\\%s could not be read (%s); using defaults and leaving the file as it is", profileFileName, profileStatus:sub(8))
 elseif profileStatus == "loaded" or profileStatus == "migrated" then
     say("game profile: GameProfiles\\%s%s", profileFileName, (Profile.Target or "") ~= "" and (" (target " .. Profile.Target .. ")") or " (target: the pawn you control)")
+end
+if (Profile.featureNote or "") ~= "" then
+    say("game profile settings over config.lua: %s", Profile.featureNote)
 end
 do
     -- An enabled XTGBodySlider would hook the same function and edit the pose twice.
@@ -3606,7 +3643,12 @@ end)
 
 -- Scene copies: new skeletal meshes are looked at once their mesh is set (a few property reads);
 -- blueprints that put a mesh on a component, and scene captures (3D menu previews), start a short search.
-if late.copies then
+-- These two run inside the engine's object construction, which UE4SS calls on whatever thread builds
+-- the object. In games that stream levels on the async loading thread (Stellar Blade) Lua then runs on
+-- that thread while the game thread runs it too, which corrupts the Lua state and crashes the game.
+-- Off unless config.lua / the game profile's Features set SceneCopyWatchNew = true; copies are still
+-- found by the searches and the mesh hooks below.
+if late.copies and Config.SceneCopyWatchNew == true then
     pcall(function()
         NotifyOnNewObject("/Script/Engine.SkeletalMeshComponent", function(obj)
             late.copies.offer(obj)
@@ -3619,6 +3661,8 @@ if late.copies then
             return false
         end)
     end)
+end
+if late.copies then
     pcall(function() -- a function of its own: main.lua's main chunk is at Lua's limit of 200 locals
         for _, fn in ipairs({ "/Script/Engine.SkeletalMeshComponent:SetSkeletalMesh", "/Script/Engine.SkeletalMeshComponent:SetSkeletalMeshAsset",
             "/Script/Engine.SkinnedMeshComponent:SetSkinnedMeshAsset", "/Script/Engine.SkinnedMeshComponent:SetSkeletalMesh" }) do

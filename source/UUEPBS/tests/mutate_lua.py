@@ -174,6 +174,22 @@ M = [
      "    if vt and lastView and vt ~= lastView then", "    if false then", "uuepbs_copies.lua"),
     ("2.8: searches while out of view never stop",
      "and away.count < AWAY_MAX then", "then", "uuepbs_copies.lua"),
+    ("2.8.1: profile Features ignored",
+     "            Config[k] = v\n", "\n"),
+    ("2.8.1: ready-made profile Features ignored",
+     "    local sources = { builtIn and builtIn.Features or false, Profile.Features or false }",
+     "    local sources = { false, Profile.Features or false }"),
+    ("2.8.1: ready-made Features win over the file's",
+     "    local sources = { builtIn and builtIn.Features or false, Profile.Features or false }",
+     "    local sources = { Profile.Features or false, builtIn and builtIn.Features or false }"),
+    ("2.8.1: folder settings taken from Features",
+     "PresetFolder = true, PresetFolderName = true,", "PresetFolderName = true,"),
+    ("2.8.1: new-object watch always on",
+     "if late.copies and Config.SceneCopyWatchNew == true then", "if late.copies then"),
+    ("2.8.1: Stellar Blade's ready-made Features gone",
+     "        Features = { SceneCopyWatchNew = false },\n", "\n"),
+    ("2.8.1: profile writer drops nested objects",
+     "    elseif type(v) == \"table\" and #v == 0 and next(v) ~= nil then", "    elseif false then", "uuepbs_json.lua"),
 ]
 
 bad = 0
@@ -193,7 +209,7 @@ try:
         with open(os.path.join(target, fname), "w", encoding="utf-8") as f:
             f.write(text.replace(old, new))
         caught = None
-        for mode in ["gon", "generic", "nodir", "broken", "legacy", "polaris", "tekkenjson", "tekkenedit", "nobody", "names"]:
+        for mode in ["gon", "sb", "sbon", "sbnew", "generic", "nodir", "broken", "legacy", "polaris", "tekkenjson", "tekkenedit", "nobody", "names"]:
             r = subprocess.run([lua, "lua_harness.lua", target, peer, work, mode], capture_output=True, text=True)
             if r.returncode != 0:
                 caught = mode + ": " + ((r.stderr.strip().splitlines() or ["?"])[0])[:110]

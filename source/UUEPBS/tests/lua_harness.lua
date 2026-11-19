@@ -263,6 +263,7 @@ function FindAllOf(name)
 end
 
 local project = mode == "gon" and "D:\\Steam Games\\steamapps\\common\\GON God Of Nothing\\Roku3"
+    or (mode == "sb" or mode == "sbnew" or mode == "sbon") and "D:\\Steam Games\\steamapps\\common\\StellarBlade\\SB"
     or (mode == "polaris" or mode == "tekkenedit" or mode == "tekkenjson") and "C:\\Program Files (x86)\\Steam\\steamapps\\common\\TEKKEN 8\\Polaris"
     or "C:\\Games\\Some Game\\SomeGame"
 local scriptPath = project .. "\\Binaries\\Win64\\ue4ss\\Mods\\UUEPBS\\Scripts\\main.lua"
@@ -295,7 +296,25 @@ if mode == "legacy" then
     realOpen(work .. "/legacy/Scripts/main.lua", "wb"):close()
 end
 if mode ~= "nodir" then os.execute("mkdir -p " .. work .. "/Scripts/GameProfiles") end
-if mode == "gon" then os.execute("cp " .. scripts .. "/GameProfiles/Roku3.json " .. work .. "/Scripts/GameProfiles/") end
+local gonText
+if mode == "gon" then
+    -- the shipped profile plus "Features": a config.lua setting turned on for this game only
+    local t = assert(realOpen(scripts .. "/GameProfiles/Roku3.json", "rb")):read("a")
+    t = t:gsub('\n  "_help"', '\n  "Features": { "SceneCopyWatchNew": true },\n  "_help"', 1)
+    realOpen(work .. "/Scripts/GameProfiles/Roku3.json", "wb"):write(t):close()
+    gonText = t
+end
+-- sb: Stellar Blade's shipped profile with a Features block of the user's own (a setting, and a folder
+-- that cannot change this late); the ready-made profile's SceneCopyWatchNew = false still applies.
+-- sbon: the file turns SceneCopyWatchNew back on, which wins over the ready-made profile.
+-- sbnew: no file yet, the ready-made profile is written.
+local sbText
+if mode == "sb" or mode == "sbon" then
+    sbText = assert(realOpen(scripts .. "/GameProfiles/SB.json", "rb")):read("a")
+    sbText = sbText:gsub('\n  "Features": %b{}', mode == "sbon" and '\n  "Features": { "SceneCopyWatchNew": true }'
+        or '\n  "Features": { "HandContact": false, "PresetFolder": "Z:\\\\nope" }', 1)
+    realOpen(work .. "/Scripts/GameProfiles/SB.json", "wb"):write(sbText):close()
+end
 local brokenText = '{\n  "Target": "BP_Guard_C"\n  "PrimaryComponent": "x"\n}\n'
 if mode == "broken" then realOpen(work .. "/Scripts/GameProfiles/SomeGame.json", "wb"):write(brokenText):close() end
 realOpen(work .. "/native/UUEPBS.dll", "wb"):close()
@@ -377,7 +396,7 @@ if mode == "polaris" and os.getenv("UUEPBS_MAKE_FIXTURE") then
     realPrint("fixture written: " .. FIXTURE)
     os.exit(0)
 end
-local profilePath = work .. "/Scripts/GameProfiles/" .. (mode == "gon" and "Roku3" or (mode == "polaris" or mode == "tekkenedit" or mode == "tekkenjson") and "Polaris" or "SomeGame") .. ".json"
+local profilePath = work .. "/Scripts/GameProfiles/" .. (mode == "gon" and "Roku3" or (mode == "sb" or mode == "sbnew" or mode == "sbon") and "SB" or (mode == "polaris" or mode == "tekkenedit" or mode == "tekkenjson") and "Polaris" or "SomeGame") .. ".json"
 if mode == "generic" then
     local p = assert(json.decode(assert(read(profilePath), "profile file created on first run")))
     check(p.Project == "SomeGame" and p.Target == "" and p.PrimaryComponent == "" and p.SameSkeletonOnly == true, "new profile from Default")
@@ -390,6 +409,37 @@ elseif mode == "legacy" then
     check(read(profilePath) == legacyText, "XTGBodySlider profile copied verbatim")
     check(table.concat(printed, ""):find("copied the XTGBodySlider game profile", 1, true), "migration reported")
     check(table.concat(printed, ""):find("XTGBodySlider (the old name of this mod) is still enabled", 1, true), "old install warned about")
+end
+-- Game profile "Features": config.lua settings per game. Scene Copies' new-object watch runs Lua on the
+-- thread that creates the object (Stellar Blade: the async loading thread), so it is off unless asked for.
+do
+    local log = table.concat(printed, "")
+    local SKEL, CAP = "/Script/Engine.SkeletalMeshComponent", "/Script/Engine.SceneCaptureComponent2D"
+    if mode == "gon" then
+        check(cfg.SceneCopyWatchNew == true and log:find("game profile settings over config.lua: SceneCopyWatchNew = true", 1, true),
+            "profile Features win over config.lua:\n" .. log)
+    elseif mode == "sb" then
+        check(cfg.HandContact == false and cfg.SceneCopyWatchNew == false and cfg.PresetFolder ~= "Z:\\nope"
+            and log:find("game profile settings over config.lua: HandContact = false, SceneCopyWatchNew = false", 1, true),
+            "the file's Features over the ready-made profile's, folders left alone:\n" .. log)
+        check(read(profilePath) == sbText, "an existing profile is not rewritten")
+    elseif mode == "sbon" then
+        check(cfg.SceneCopyWatchNew == true and log:find("game profile settings over config.lua: SceneCopyWatchNew = true", 1, true),
+            "the file's Features win over the ready-made profile's:\n" .. log)
+    elseif mode == "sbnew" then
+        local p = assert(json.decode(assert(read(profilePath), "SB profile written")))
+        check(p.Game == "Stellar Blade" and type(p.Features) == "table" and p.Features.SceneCopyWatchNew == false
+            and type(p.Hook) == "table" and p.Hook.Slot == 303, "ready-made Stellar Blade profile written:\n" .. read(profilePath))
+        check(log:find("game profile settings over config.lua: SceneCopyWatchNew = false", 1, true), "ready-made Features applied:\n" .. log)
+    else
+        check(cfg.SceneCopyWatchNew == false and not log:find("game profile settings over config.lua", 1, true), "no Features, config.lua as it is")
+    end
+    if mode == "gon" or mode == "sbon" then
+        check(notifies[SKEL] and notifies[CAP], "new meshes and scene captures watched when asked for")
+    else
+        check(notifies[SKEL] == nil and notifies[CAP] == nil, "new meshes and scene captures not watched by default")
+    end
+    check(notifies["/Script/Engine.Character"], "new characters still watched")
 end
 check(loaded and loaded[1] == project .. "\\Binaries\\Win64\\ue4ss\\Mods\\UUEPBS\\native\\UUEPBS.dll" and loaded[2] == "*", "loadlib path")
 check(loop and console.uuepbs and console.ubs and not console.xbs, "registrations")
@@ -587,7 +637,7 @@ check(s:find("key F6\n", 1, true), "hotkey")
 check(not s:find("\nswitch ", 1, true), "Character Switch Watcher off by default")
 check(s:find("engine 5.7\n", 1, true), "engine version")
 if mode == "gon" then
-    check(read(profilePath) == read(scripts .. "/GameProfiles/Roku3.json"), "shipped profile not rewritten")
+    check(read(profilePath) == gonText, "shipped profile not rewritten")
     check(s:find("game Roku3\n", 1, true), "game folder")
     check(s:find("rig %x+ CharacterMesh0 primary=1 owner=BP_Rokuv3_C_0 %(player%) bones=184 parents=184 ref=184 p5=" .. boneParents[6] .. " n5=" .. boneNames[6]:gsub("%p", "%%%0")), "primary rig with reference:\n" .. s)
     check(s:find("rig %x+ C_shirt1 primary=0 owner=BP_Rokuv3_C_0 %(player%) bones=184 parents=184 ref=0"), "clothing on the same skeleton")

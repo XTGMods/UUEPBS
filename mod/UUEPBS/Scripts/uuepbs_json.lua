@@ -223,6 +223,18 @@ local function scalar(v)
         return v and "true" or "false"
     elseif type(v) == "number" then
         return (v == math.floor(v) and string.format("%d", v)) or string.format("%.6g", v)
+    elseif type(v) == "table" and #v == 0 and next(v) ~= nil then
+        -- an object on one line, keys sorted (a ready-made profile's "Hook" / "Features")
+        local keys = {}
+        for k in pairs(v) do
+            keys[#keys + 1] = tostring(k)
+        end
+        table.sort(keys)
+        local parts = {}
+        for _, k in ipairs(keys) do
+            parts[#parts + 1] = quote(k) .. ": " .. scalar(v[k])
+        end
+        return "{ " .. table.concat(parts, ", ") .. " }"
     elseif type(v) == "table" then
         local parts = {}
         for _, item in ipairs(v) do
